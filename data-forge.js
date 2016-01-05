@@ -1777,7 +1777,7 @@ window.dataForge = require('../data-forge-js/index');
 var assert = require('chai').assert;
 var E = require('linq');
 var dropElement = require('./src/utils').dropElement;
-var ArrayEnumerator = require('./src/enumerators/array');
+var ArrayEnumerator = require('./src/iterators/array');
 require('sugar');
 
 var DataFrame = require('./src/dataframe');
@@ -1982,7 +1982,7 @@ var dataForge = {
 };
 
 module.exports = dataForge;
-},{"./src/basecolumn":48,"./src/basedataframe":49,"./src/baseindex":50,"./src/column":51,"./src/dataframe":52,"./src/enumerators/array":53,"./src/index":54,"./src/lazycolumn":56,"./src/lazydataframe":57,"./src/lazyindex":58,"./src/utils":59,"chai":8,"linq":45,"sugar":47}],8:[function(require,module,exports){
+},{"./src/basecolumn":48,"./src/basedataframe":49,"./src/baseindex":50,"./src/column":51,"./src/dataframe":52,"./src/index":53,"./src/iterators/array":55,"./src/lazycolumn":56,"./src/lazydataframe":57,"./src/lazyindex":58,"./src/utils":59,"chai":8,"linq":45,"sugar":47}],8:[function(require,module,exports){
 module.exports = require('./lib/chai');
 
 },{"./lib/chai":9}],9:[function(require,module,exports){
@@ -23767,22 +23767,22 @@ Date.addLocale('zh-TW', {
 var assert = require('chai').assert; 
 var E = require('linq');
 var moment = require('moment');
-var ArrayEnumerator = require('./enumerators/array');
+var ArrayIterator = require('./iterators/array');
 
 //
-// Helper function to validate an enumerator.
+// Helper function to validate an iterator.
 //
-var validateEnumerator = function (enumerator) {
-	assert.isObject(enumerator, "Expected an 'enumerator' object.");
-	assert.isFunction(enumerator.moveNext, "Expected enumerator to have function 'moveNext'.");
-	assert.isFunction(enumerator.getCurrent, "Expected enumerator to have function 'getCurrent'.");
+var validateIterator = function (iterator) {
+	assert.isObject(iterator, "Expected an 'iterator' object.");
+	assert.isFunction(iterator.moveNext, "Expected iterator to have function 'moveNext'.");
+	assert.isFunction(iterator.getCurrent, "Expected iterator to have function 'getCurrent'.");
 };
 
 /**
  * Base class for columns.
  *
  * getName - Get the name of the column.
- * getEnumerator - Get the enumerator for the column.
+ * getIterator - Get the iterator for the column.
  * getIndex - Get the index for the column.
  */
 var BaseColumn = function () {	
@@ -23803,7 +23803,7 @@ BaseColumn.prototype.skip = function (numRows) {
 	return new LazyColumn(
 		self.getName(),
 		function () {
-			return new ArrayEnumerator(E
+			return new ArrayIterator(E
 				.from(self.toValues())
 				.skip(numRows)
 				.toArray()
@@ -23829,7 +23829,7 @@ BaseColumn.prototype.take = function (numRows) {
 	return new LazyColumn(
 		self.getName(),
 		function () {
-			return new ArrayEnumerator(E
+			return new ArrayIterator(E
 				.from(self.toValues())
 				.take(numRows)
 				.toArray()
@@ -23880,7 +23880,7 @@ BaseColumn.prototype.where = function (filterSelectorPredicate) {
 	return new LazyColumn(
 		self.getName(),
 		function () {
-			return new ArrayEnumerator(E.from(executeLazyWhere())
+			return new ArrayIterator(E.from(executeLazyWhere())
 				.select(function (data) {
 					return data[1]; // Value
 				})
@@ -23892,7 +23892,7 @@ BaseColumn.prototype.where = function (filterSelectorPredicate) {
 			return new LazyIndex(
 				self.getIndex().getName(),
 				function () {
-					return new ArrayEnumerator(E.from(executeLazyWhere())
+					return new ArrayIterator(E.from(executeLazyWhere())
 						.select(function (data) {
 							return data[0]; // Index
 						})
@@ -23918,7 +23918,7 @@ BaseColumn.prototype.select = function (selector) {
 	return new LazyColumn(
 		self.getName(),
 		function () {
-			return new ArrayEnumerator(
+			return new ArrayIterator(
 				E.from(self.toValues())
 					.select(function (value) {
 						return selector(value);
@@ -23969,7 +23969,7 @@ BaseColumn.prototype.selectMany = function (selector) {
 		self.getName(),
 		function () {
 			lazyEvaluate();
-			return new ArrayEnumerator(newValues);
+			return new ArrayIterator(newValues);
 		},
 		function () {
 			var LazyIndex = require('./lazyindex');
@@ -23989,7 +23989,7 @@ BaseColumn.prototype.selectMany = function (selector) {
 								.toArray();
 						})
 						.toArray();
-					return new ArrayEnumerator(indexValues);
+					return new ArrayIterator(indexValues);
 				}
 			);
 		}
@@ -24060,7 +24060,7 @@ var executeOrderBy = function (self, batch) {
 			return self.getColumnNames();
 		},
 		function () {
-			return new ArrayEnumerator(
+			return new ArrayIterator(
 				E.from(executeLazySort())
 					.select(function (row) {
 						return row[1]; // Extract the value (minus the index) from the sorted data.					
@@ -24073,7 +24073,7 @@ var executeOrderBy = function (self, batch) {
 			return new LazyIndex(
 				self.getIndex().getName(),
 				function () {
-					return new ArrayEnumerator(E.from(executeLazySort())
+					return new ArrayIterator(E.from(executeLazySort())
 						.select(function (row) {
 							return row[0]; // Extract the index from the sorted data.
 						})
@@ -24195,7 +24195,7 @@ BaseColumn.prototype.getRowsSubset = function (index, count) {
 	return new LazyColumn(
 		self.getName(),
 		function () {
-			return new ArrayEnumerator(
+			return new ArrayIterator(
 				E.from(self.toValues())
 					.skip(index)
 					.take(count)
@@ -24244,7 +24244,7 @@ BaseColumn.prototype.rollingWindow = function (period, fn) {
 	return new LazyColumn(
 		self.getName(), 
 		function () {
-			return new ArrayEnumerator(E.from(newIndexAndValues)
+			return new ArrayIterator(E.from(newIndexAndValues)
 				.select(function (indexAndValue) {
 					return indexAndValue[1];
 				})
@@ -24257,7 +24257,7 @@ BaseColumn.prototype.rollingWindow = function (period, fn) {
 			return new LazyIndex(
 				self.getIndex().getName(),
 				function () {
-					return new ArrayEnumerator(E.from(newIndexAndValues)
+					return new ArrayIterator(E.from(newIndexAndValues)
 						.select(function (indexAndValue) {
 							return indexAndValue[0];
 						})
@@ -24312,7 +24312,7 @@ BaseColumn.prototype.reindex = function (newIndex) {
 			//
 			// Return the columns values in the order specified by the new index.
 			//
-			return new ArrayEnumerator(E.from(newIndex.toValues())
+			return new ArrayIterator(E.from(newIndex.toValues())
 				.select(function (newIndexValue) {
 					return indexMap[newIndexValue];
 				})
@@ -24490,7 +24490,7 @@ BaseColumn.prototype.detectTypes = function () {
 					return accumulated;
 				});
 
-			return new ArrayEnumerator(
+			return new ArrayIterator(
 				E.from(Object.keys(typeFrequencies))
 					.select(function (valueType) {
 						return [
@@ -24531,21 +24531,31 @@ BaseColumn.prototype.truncateStrings = function (maxLength) {
 BaseColumn.prototype.toValues = function () {
 
 	var self = this;
-	var enumerator = self.getEnumerator();
-	validateEnumerator(enumerator);
+	var iterator = self.getIterator();
+	validateIterator(iterator);
 
 	var values = [];
 
-	while (enumerator.moveNext()) {
-		values.push(enumerator.getCurrent());
+	while (iterator.moveNext()) {
+		values.push(iterator.getCurrent());
 	}
 
 	return values;
 };
 
+/**
+ * Forces lazy evaluation to complete and 'bakes' the column into memory.
+ */
+BaseColumn.prototype.bake = function () {
+
+	var self = this;
+
+	var Column = require('./column');
+	return new Column(self.getName(), self.toValues(), self.getIndex().bake());
+};
 
 module.exports = BaseColumn;
-},{"./column":51,"./enumerators/array":53,"./lazycolumn":56,"./lazydataframe":57,"./lazyindex":58,"chai":8,"easy-table":44,"linq":45,"moment":46}],49:[function(require,module,exports){
+},{"./column":51,"./iterators/array":55,"./lazycolumn":56,"./lazydataframe":57,"./lazyindex":58,"chai":8,"easy-table":44,"linq":45,"moment":46}],49:[function(require,module,exports){
 'use strict';
 
 // 
@@ -24554,18 +24564,18 @@ module.exports = BaseColumn;
 
 var LazyColumn = require('./lazycolumn');
 var LazyIndex = require('./lazyindex');
-var ArrayEnumerator = require('./enumerators/array');
+var ArrayIterator = require('./iterators/array');
 
 var assert = require('chai').assert; 
 var E = require('linq');
 
 //
-// Helper function to validate an enumerator.
+// Helper function to validate an iterator.
 //
-var validateEnumerator = function (enumerator) {
-	assert.isObject(enumerator, "Expected an 'enumerator' object.");
-	assert.isFunction(enumerator.moveNext, "Expected enumerator to have function 'moveNext'.");
-	assert.isFunction(enumerator.getCurrent, "Expected enumerator to have function 'getCurrent'.");
+var validateEnumerator = function (iterator) {
+	assert.isObject(iterator, "Expected an 'iterator' object.");
+	assert.isFunction(iterator.moveNext, "Expected iterator to have function 'moveNext'.");
+	assert.isFunction(iterator.getCurrent, "Expected iterator to have function 'getCurrent'.");
 };
 
 /**
@@ -24575,7 +24585,7 @@ var validateEnumerator = function (enumerator) {
  *
  * getIndex - Get the index for the data frame.
  * getColumnNames - Get the columns for the data frame.
- * getEnumerator - Get a row enumerator for the data frame.
+ * getIterator - Get a row iterator for the data frame.
  */
 var BaseDataFrame = function () {
 };
@@ -24637,18 +24647,18 @@ BaseDataFrame.prototype.skip = function (numRows) {
 			return self.getColumnNames();
 		},
 		function () {
-			var enumerator = self.getEnumerator();
+			var iterator = self.getIterator();
 
 			return {
 				moveNext: function () {
-					while (--numRows >= 0 && enumerator.moveNext()) {
+					while (--numRows >= 0 && iterator.moveNext()) {
 						// Skip first rows.
 					}
-					return enumerator.moveNext();
+					return iterator.moveNext();
 				},
 
 				getCurrent: function () {
-					return enumerator.getCurrent();
+					return iterator.getCurrent();
 				},
 			};
 		},
@@ -24674,18 +24684,18 @@ BaseDataFrame.prototype.take = function (numRows) {
 			return self.getColumnNames();
 		},
 		function () {
-			var enumerator = self.getEnumerator();
+			var iterator = self.getIterator();
 
 			return {
 				moveNext: function () {
 					if (--numRows >= 0) {
-						return enumerator.moveNext();
+						return iterator.moveNext();
 					}
 					return false;
 				},
 
 				getCurrent: function () {
-					return enumerator.getCurrent();
+					return iterator.getCurrent();
 				},
 			};
 		},
@@ -24735,7 +24745,7 @@ BaseDataFrame.prototype.where = function (filterSelectorPredicate) {
 			return self.getColumnNames();
 		},
 		function () {
-			return new ArrayEnumerator(
+			return new ArrayIterator(
 				E.from(executeLazyWhere())
 					.select(function (data) {
 						return data[1]; // Row
@@ -24747,7 +24757,7 @@ BaseDataFrame.prototype.where = function (filterSelectorPredicate) {
 			return new LazyIndex(
 				self.getIndex().getName(),
 				function () {
-					return new ArrayEnumerator(E.from(executeLazyWhere())
+					return new ArrayIterator(E.from(executeLazyWhere())
 						.select(function (data) {
 							return data[0]; // Index
 						})
@@ -24800,7 +24810,7 @@ BaseDataFrame.prototype.select = function (selector) {
 		},
 		function () {
 			lazyEvaluate();
-			return new ArrayEnumerator(
+			return new ArrayIterator(
 				E.from(newValues)
 					.select(function (value) {
 						return E.from(newColumnNames)
@@ -24880,7 +24890,7 @@ BaseDataFrame.prototype.selectMany = function (selector) {
 		},
 		function () {
 			lazyEvaluate();
-			return new ArrayEnumerator(newRows);
+			return new ArrayIterator(newRows);
 		},
 		function () {
 			return new LazyIndex(
@@ -24898,7 +24908,7 @@ BaseDataFrame.prototype.selectMany = function (selector) {
 								.toArray();
 						})
 						.toArray();
-					return new ArrayEnumerator(indexValues);
+					return new ArrayIterator(indexValues);
 				}
 			);
 		}
@@ -24929,7 +24939,7 @@ BaseDataFrame.prototype.getColumn = function (columnNameOrIndex) {
 	return new LazyColumn(
 		self.getColumnNames()[columnIndex],
 		function () {
-			return new ArrayEnumerator(E.from(self.toValues())
+			return new ArrayIterator(E.from(self.toValues())
 				.select(function (entry) {
 					return entry[columnIndex];
 				})
@@ -24977,7 +24987,7 @@ BaseDataFrame.prototype.getColumnsSubset = function (columnNames) {
 				})
 				.toArray();
 			
-			return new ArrayEnumerator(
+			return new ArrayIterator(
 				E.from(self.toValues())
 					.select(function (entry) {
 						return E.from(columnIndices)
@@ -25059,7 +25069,7 @@ var executeOrderBy = function (self, batch) {
 			return self.getColumnNames();
 		},
 		function () {
-			return new ArrayEnumerator(
+			return new ArrayIterator(
 				E.from(executeLazySort())
 					.select(function (row) {
 						return E.from(row).skip(1).toArray(); // Extract the values (minus the index) from the sorted data.					
@@ -25072,7 +25082,7 @@ var executeOrderBy = function (self, batch) {
 			return new LazyIndex(
 				self.getIndex().getName(),
 				function () {
-					return new ArrayEnumerator(E.from(executeLazySort())
+					return new ArrayIterator(E.from(executeLazySort())
 						.select(function (row) {
 							return row[0]; // Extract the index from the sorted data.
 						})
@@ -25240,7 +25250,7 @@ BaseDataFrame.prototype.dropColumn = function (columnOrColumns) {
 		},
 		function () {
 			var columnIndices = lazyGenerateColumnIndices();
-			return new ArrayEnumerator(
+			return new ArrayIterator(
 				E.from(self.toValues())
 					.select(function (row) {
 						return E.from(row)
@@ -25287,7 +25297,7 @@ BaseDataFrame.prototype.setColumn = function (columnName, data) {
 				return self.getColumnNames().concat([columnName]);
 			},
 			function () {
-				return new ArrayEnumerator(
+				return new ArrayIterator(
 					E.from(self.toValues())
 						.select(function (row, rowIndex) {
 							return row.concat([data[rowIndex]]);
@@ -25317,7 +25327,7 @@ BaseDataFrame.prototype.setColumn = function (columnName, data) {
 					.toArray();
 			},
 			function () {
-				return new ArrayEnumerator(
+				return new ArrayIterator(
 					E.from(self.toValues())
 						.select(function (row, rowIndex) {
 							return E.from(row)
@@ -25360,7 +25370,7 @@ BaseDataFrame.prototype.getRowsSubset = function (index, count) { //todo: change
 			return self.columnNames();
 		},
 		function () {
-			return new ArrayEnumerator(
+			return new ArrayIterator(
 				E.from(self.toValues())
 					.skip(index)
 					.take(count)
@@ -25389,13 +25399,13 @@ BaseDataFrame.prototype.setIndex = function (columnNameOrIndex) {
 			return self.getColumnNames();
 		},
 		function () {
-			return new ArrayEnumerator(self.toValues());
+			return new ArrayIterator(self.toValues());
 		},
 		function () {
 			return new LazyIndex(
 				self.getColumn(columnNameOrIndex).getName(),
 				function () {
-					return new ArrayEnumerator(self.getColumn(columnNameOrIndex).toValues());
+					return new ArrayIterator(self.getColumn(columnNameOrIndex).toValues());
 				}
 			);
 		}		
@@ -25415,13 +25425,13 @@ BaseDataFrame.prototype.resetIndex = function () {
 			return self.getColumnNames();
 		},
 		function () {
-			return self.getEnumerator();
+			return self.getIterator();
 		},
 		function () {
 			return new LazyIndex( //todo: broad-cast index
 				"__index___",
 				function () {
-					return new ArrayEnumerator(E.range(0, self.toValues().length).toArray());
+					return new ArrayIterator(E.range(0, self.toValues().length).toArray());
 				}
 			);
 		}		
@@ -25568,7 +25578,7 @@ BaseDataFrame.prototype.remapColumns = function (columnNames) {
 			return columnNames;
 		},
 		function () {
-			return new ArrayEnumerator(
+			return new ArrayIterator(
 				E.from(self.toValues())
 					.select(function (row) {
 						return E.from(columnNames)
@@ -25617,7 +25627,7 @@ BaseDataFrame.prototype.renameColumns = function (newColumnNames) {
 			return newColumnNames;
 		},
 		function () {
-			return self.getEnumerator();
+			return self.getIterator();
 		},
 		function () {
 			return self.getIndex();
@@ -25632,13 +25642,13 @@ BaseDataFrame.prototype.toValues = function () {
 
 	var self = this;
 
-	var enumerator = self.getEnumerator();
-	validateEnumerator(enumerator);
+	var iterator = self.getIterator();
+	validateEnumerator(iterator);
 
 	var values = [];
 
-	while (enumerator.moveNext()) {
-		values.push(enumerator.getCurrent());
+	while (iterator.moveNext()) {
+		values.push(iterator.getCurrent());
 	}
 
 	return values;
@@ -25651,7 +25661,7 @@ BaseDataFrame.prototype.toObjects = function () {
 
 	var self = this;
 	var columnNames = self.getColumnNames();
-	return E.from(self.toValues()) //todo: should this rely on get enumerator?
+	return E.from(self.toValues()) //todo: should this rely on get iterator?
 		.select(function (row) {
 			return E.from(columnNames)
 				.zip(row, function (columnName, columnValue) {
@@ -25700,22 +25710,37 @@ BaseDataFrame.prototype.toCSV = function () {
 	return [header].concat(rows).join('\r\n');	
 };
 
+/**
+ * Forces lazy evaluation to complete and 'bakes' the data frame into memory.
+ */
+BaseDataFrame.prototype.bake = function () {
+
+	var self = this;
+
+	var DataFrame = require('./dataframe');
+	return new DataFrame({
+			columnNames: self.getColumnNames(),
+			rows: self.toValues(),
+			index: self.getIndex().bake(),
+		});
+};
+
 module.exports = BaseDataFrame;
-},{"../index":7,"./column":51,"./dataframe":52,"./enumerators/array":53,"./lazycolumn":56,"./lazydataframe":57,"./lazyindex":58,"chai":8,"easy-table":44,"linq":45}],50:[function(require,module,exports){
+},{"../index":7,"./column":51,"./dataframe":52,"./iterators/array":55,"./lazycolumn":56,"./lazydataframe":57,"./lazyindex":58,"chai":8,"easy-table":44,"linq":45}],50:[function(require,module,exports){
 'use strict';
 
-var ArrayEnumerator = require('./enumerators/array');
+var ArrayIterator = require('./iterators/array');
 
 var assert = require('chai').assert;
 var E = require('linq');
 
 //
-// Helper function to validate an enumerator.
+// Helper function to validate an iterator.
 //
-var validateEnumerator = function (enumerator) {
-	assert.isObject(enumerator, "Expected an 'enumerator' object.");
-	assert.isFunction(enumerator.moveNext, "Expected enumerator to have function 'moveNext'.");
-	assert.isFunction(enumerator.getCurrent, "Expected enumerator to have function 'getCurrent'.");
+var validateEnumerator = function (iterator) {
+	assert.isObject(iterator, "Expected an 'iterator' object.");
+	assert.isFunction(iterator.moveNext, "Expected iterator to have function 'moveNext'.");
+	assert.isFunction(iterator.getCurrent, "Expected iterator to have function 'getCurrent'.");
 };
 
 /**
@@ -25724,7 +25749,7 @@ var validateEnumerator = function (enumerator) {
  * Derives classes must implement:
  *
  *		getName - Get the name of theindex.
- *		getEnumerator - Get an enumerator for iterating the values of the index.
+ *		getIterator - Get an iterator for iterating the values of the index.
  */
 var BaseIndex = function () {
 	
@@ -25744,7 +25769,7 @@ BaseIndex.prototype.skip = function (numRows) {
 	return new LazyIndex(
 		self.getName(),
 		function () {
-			return new ArrayEnumerator(E.from(self.toValues()).skip(numRows).toArray());
+			return new ArrayIterator(E.from(self.toValues()).skip(numRows).toArray());
 		}
 	);
 };
@@ -25763,7 +25788,7 @@ BaseIndex.prototype.take = function (numRows) {
 	return new LazyIndex(
 		self.getName(),
 		function () {
-			return new ArrayEnumerator(E.from(self.toValues()).take(numRows).toArray());
+			return new ArrayIterator(E.from(self.toValues()).take(numRows).toArray());
 		}
 	);
 };
@@ -25785,7 +25810,7 @@ BaseIndex.prototype.getRowsSubset = function (index, count) {
 	return new LazyIndex(
 		self.getName(),
 		function () {
-			return new ArrayEnumerator(E.from(self.toValues())
+			return new ArrayIterator(E.from(self.toValues())
 				.skip(index)
 				.take(count)
 				.toArray()
@@ -25800,21 +25825,31 @@ BaseIndex.prototype.getRowsSubset = function (index, count) {
 BaseIndex.prototype.toValues = function () {
 
 	var self = this;
-	var enumerator = self.getEnumerator();
-	validateEnumerator(enumerator);
+	var iterator = self.getIterator();
+	validateEnumerator(iterator);
 
 	var values = [];
 
-	while (enumerator.moveNext()) {
-		values.push(enumerator.getCurrent());
+	while (iterator.moveNext()) {
+		values.push(iterator.getCurrent());
 	}
 
 	return values;
 };
 
+/*
+ * Forces lazy evaluation to complete and 'bakes' the index into memory.
+ */
+BaseIndex.prototype.bake = function () {
+
+	var self = this;
+
+	var Index = require('./index');
+	return new Index(self.getName(), self.toValues());
+};
 
 module.exports = BaseIndex;
-},{"./enumerators/array":53,"./lazyindex":58,"chai":8,"linq":45}],51:[function(require,module,exports){
+},{"./index":53,"./iterators/array":55,"./lazyindex":58,"chai":8,"linq":45}],51:[function(require,module,exports){
 'use strict';
 
 //
@@ -25823,7 +25858,7 @@ module.exports = BaseIndex;
 
 var BaseColumn = require('./basecolumn');
 var LazyIndex = require('./lazyindex');
-var ArrayEnumerator = require('./enumerators/array');
+var ArrayIterator = require('./iterators/array');
 
 var assert = require('chai').assert;
 var E = require('linq');
@@ -25847,7 +25882,7 @@ var Column = function (name, values, index) {
 		new LazyIndex(
 			"__index___",
 			function () {
-				return new ArrayEnumerator(E.range(0, values.length).toArray());
+				return new ArrayIterator(E.range(0, values.length).toArray());
 			}
 		);
 };
@@ -25863,11 +25898,11 @@ Column.prototype.getName = function () {
 }
 
 /**
- * Get an enumerator for the iterating the values of the column.
+ * Get an iterator for the iterating the values of the column.
  */
-Column.prototype.getEnumerator = function () {
+Column.prototype.getIterator = function () {
 	var self = this;
-	return new ArrayEnumerator(self._values);
+	return new ArrayIterator(self._values);
 };
 
 /**
@@ -25879,7 +25914,7 @@ Column.prototype.getIndex = function () {
 };
 
 module.exports = Column;
-},{"./basecolumn":48,"./enumerators/array":53,"./inherit":55,"./lazyindex":58,"chai":8,"linq":45}],52:[function(require,module,exports){
+},{"./basecolumn":48,"./inherit":54,"./iterators/array":55,"./lazyindex":58,"chai":8,"linq":45}],52:[function(require,module,exports){
 'use strict';
 
 //
@@ -25889,7 +25924,7 @@ module.exports = Column;
 var BaseDataFrame = require('./basedataframe');
 var LazyIndex = require('./lazyindex');
 
-var ArrayEnumerator = require('./enumerators/array');
+var ArrayIterator = require('./iterators/array');
 var assert = require('chai').assert;
 var E = require('linq');
 var fs = require('fs');
@@ -25979,7 +26014,7 @@ var DataFrame = function (config) {
 		new LazyIndex(
 			"__index___",
 			function () {
-				return new ArrayEnumerator(E.range(0, self._values.length).toArray());
+				return new ArrayIterator(E.range(0, self._values.length).toArray());
 			}
 		);
 };
@@ -26003,46 +26038,21 @@ DataFrame.prototype.getColumnNames = function () {
 };
 
 /**
- * Get an enumerator to enumerate the rows of the DataFrame.
+ * Get an iterator to enumerate the rows of the DataFrame.
  */
-DataFrame.prototype.getEnumerator = function () {
+DataFrame.prototype.getIterator = function () {
 	var self = this;
-	return new ArrayEnumerator(self._values);
+	return new ArrayIterator(self._values);
 };
 
 //todo: could override the get values fn... here just return the already baked values.
 
 module.exports = DataFrame;
-},{"./basedataframe":49,"./enumerators/array":53,"./inherit":55,"./lazyindex":58,"chai":8,"fs":1,"linq":45}],53:[function(require,module,exports){
-'use strict';
-
-var assert = require('chai').assert;
-
-//
-// Data-forge enumerator for iterating a standard JavaScript array.
-//
-var ArrayEnumerator = function (arr) {
-	assert.isArray(arr);
-
-	var self = this;
-
-	var rowIndex = -1;
-	
-	self.moveNext = function () {
-		return ++rowIndex < arr.length;
-	};
-
-	self.getCurrent = function () {
-		return arr[rowIndex];
-	};
-};
-
-module.exports = ArrayEnumerator;
-},{"chai":8}],54:[function(require,module,exports){
+},{"./basedataframe":49,"./inherit":54,"./iterators/array":55,"./lazyindex":58,"chai":8,"fs":1,"linq":45}],53:[function(require,module,exports){
 'use strict';
 
 var BaseIndex = require('./baseindex');
-var ArrayEnumerator = require('./enumerators/array');
+var ArrayIterator = require('./iterators/array');
 
 var assert = require('chai').assert;
 var E = require('linq');
@@ -26071,15 +26081,15 @@ Index.prototype.getName = function () {
 };
 
 /**
- * Get an enumerator to iterate the values of the index.
+ * Get an iterator to iterate the values of the index.
  */
-Index.prototype.getEnumerator = function () {
+Index.prototype.getIterator = function () {
 	var self = this;
-	return new ArrayEnumerator(self._values);
+	return new ArrayIterator(self._values);
 };
 
 module.exports = Index;
-},{"./baseindex":50,"./enumerators/array":53,"./inherit":55,"chai":8,"linq":45}],55:[function(require,module,exports){
+},{"./baseindex":50,"./inherit":54,"./iterators/array":55,"chai":8,"linq":45}],54:[function(require,module,exports){
 'use strict';
 
 //
@@ -26101,7 +26111,32 @@ function inherit(destination, source) {
 
 
 module.exports = inherit;
-},{}],56:[function(require,module,exports){
+},{}],55:[function(require,module,exports){
+'use strict';
+
+var assert = require('chai').assert;
+
+//
+// Data-forge enumerator for iterating a standard JavaScript array.
+//
+var ArrayIterator = function (arr) {
+	assert.isArray(arr);
+
+	var self = this;
+
+	var rowIndex = -1;
+	
+	self.moveNext = function () {
+		return ++rowIndex < arr.length;
+	};
+
+	self.getCurrent = function () {
+		return arr[rowIndex];
+	};
+};
+
+module.exports = ArrayIterator;
+},{"chai":8}],56:[function(require,module,exports){
 'use strict';
 
 //
@@ -26110,7 +26145,7 @@ module.exports = inherit;
 
 var BaseColumn = require('./basecolumn');
 var LazyIndex = require('./lazyindex');
-var ArrayEnumerator = require('./enumerators/array');
+var ArrayIterator = require('./iterators/array');
 
 var assert = require('chai').assert;
 var E = require('linq');
@@ -26136,7 +26171,7 @@ var LazyColumn = function (name, enumeratorFn, indexFn) {
 			return new LazyIndex(
 				"__index__",
 				function () {
-					return new ArrayEnumerator(E.range(0, self.toValues().length).toArray());
+					return new ArrayIterator(E.range(0, self.toValues().length).toArray());
 				}
 			);
 		};
@@ -26153,9 +26188,9 @@ LazyColumn.prototype.getName = function () {
 }
 
 /**
- * Get an enumerator for the iterating the values of the column.
+ * Get an iterator for the iterating the values of the column.
  */
-LazyColumn.prototype.getEnumerator = function () {
+LazyColumn.prototype.getIterator = function () {
 	var self = this;
 	return self._enumeratorFn();
 };
@@ -26169,7 +26204,7 @@ LazyColumn.prototype.getIndex = function () {
 };
 
 module.exports = LazyColumn;
-},{"./basecolumn":48,"./enumerators/array":53,"./inherit":55,"./lazyindex":58,"chai":8,"linq":45}],57:[function(require,module,exports){
+},{"./basecolumn":48,"./inherit":54,"./iterators/array":55,"./lazyindex":58,"chai":8,"linq":45}],57:[function(require,module,exports){
 'use strict';
 
 //
@@ -26179,7 +26214,7 @@ module.exports = LazyColumn;
 var LazyColumn = require('./lazycolumn');
 var BaseDataFrame = require('./basedataframe');
 var LazyIndex = require('./lazyindex');
-var ArrayEnumerator = require('./enumerators/array');
+var ArrayIterator = require('./iterators/array');
 
 var assert = require('chai').assert;
 var E = require('linq');
@@ -26203,7 +26238,7 @@ var LazyDataFrame = function (columnNamesFn, enumeratorFn, indexFn) {
 			return new LazyIndex(
 				"__index__",
 				function () {
-					return new ArrayEnumerator(E.range(0, self.toValues().length).toArray());
+					return new ArrayIterator(E.range(0, self.toValues().length).toArray());
 				}
 			);
 		};
@@ -26228,19 +26263,19 @@ LazyDataFrame.prototype.getColumnNames = function () {
 };
 
 /**
- * Get an enumerator to enumerate the rows of the DataFrame.
+ * Get an iterator to enumerate the rows of the DataFrame.
  */
-LazyDataFrame.prototype.getEnumerator = function () {
+LazyDataFrame.prototype.getIterator = function () {
 	var self = this;
 	return self._enumeratorFn();
 };
 
 module.exports = LazyDataFrame;
-},{"./basedataframe":49,"./enumerators/array":53,"./inherit":55,"./lazycolumn":56,"./lazyindex":58,"chai":8,"linq":45}],58:[function(require,module,exports){
+},{"./basedataframe":49,"./inherit":54,"./iterators/array":55,"./lazycolumn":56,"./lazyindex":58,"chai":8,"linq":45}],58:[function(require,module,exports){
 'use strict';
 
 var BaseIndex = require('./baseindex');
-var ArrayEnumerator = require('./enumerators/array');
+var ArrayIterator = require('./iterators/array');
 
 var assert = require('chai').assert;
 var E = require('linq');
@@ -26269,15 +26304,15 @@ LazyIndex.prototype.getName = function () {
 };
 
 /**
- * Get an enumerator to iterate the values of the index.
+ * Get an iterator to iterate the values of the index.
  */
-LazyIndex.prototype.getEnumerator = function () {
+LazyIndex.prototype.getIterator = function () {
 	var self = this;
 	return self._enumeratorFn();
 };
 
 module.exports = LazyIndex;
-},{"./baseindex":50,"./enumerators/array":53,"./inherit":55,"chai":8,"linq":45}],59:[function(require,module,exports){
+},{"./baseindex":50,"./inherit":54,"./iterators/array":55,"chai":8,"linq":45}],59:[function(require,module,exports){
 'use strict';
 
 var E = require('linq');
