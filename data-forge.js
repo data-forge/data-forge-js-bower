@@ -12,7 +12,7 @@
 
 var base64 = require('base64-js')
 var ieee754 = require('ieee754')
-var isArray = require('isarray')
+var isArray = require('is-array')
 
 exports.Buffer = Buffer
 exports.SlowBuffer = SlowBuffer
@@ -1469,7 +1469,7 @@ function utf8ToBytes (string, units) {
       }
 
       // valid surrogate pair
-      codePoint = (leadSurrogate - 0xD800 << 10 | codePoint - 0xDC00) + 0x10000
+      codePoint = leadSurrogate - 0xD800 << 10 | codePoint - 0xDC00 | 0x10000
     } else if (leadSurrogate) {
       // valid bmp char, but last char was a lead
       if ((units -= 3) > -1) bytes.push(0xEF, 0xBF, 0xBD)
@@ -1548,7 +1548,7 @@ function blitBuffer (src, dst, offset, length) {
 }
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"base64-js":3,"ieee754":4,"isarray":5}],3:[function(require,module,exports){
+},{"base64-js":3,"ieee754":4,"is-array":5}],3:[function(require,module,exports){
 var lookup = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
 ;(function (exports) {
@@ -1761,10 +1761,38 @@ exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
 }
 
 },{}],5:[function(require,module,exports){
-var toString = {}.toString;
 
-module.exports = Array.isArray || function (arr) {
-  return toString.call(arr) == '[object Array]';
+/**
+ * isArray
+ */
+
+var isArray = Array.isArray;
+
+/**
+ * toString
+ */
+
+var str = Object.prototype.toString;
+
+/**
+ * Whether or not the given `val`
+ * is an array.
+ *
+ * example:
+ *
+ *        isArray([]);
+ *        // > true
+ *        isArray(arguments);
+ *        // > false
+ *        isArray('');
+ *        // > false
+ *
+ * @param {mixed} val
+ * @return {bool}
+ */
+
+module.exports = isArray || function (val) {
+  return !! val && '[object Array]' == str.call(val);
 };
 
 },{}],6:[function(require,module,exports){
@@ -1966,7 +1994,7 @@ var dataForge = {
 			function () {
 				var LazyIndex = require('./src/lazyindex');
 				return new LazyIndex(
-					"__concatenated__",
+					"__index__",
 					function () {
 						return new ArrayEnumerator(E.from(dataFrames)
 							.selectMany(function (dataFrame) {
@@ -24450,7 +24478,6 @@ BaseColumn.prototype.toStrings = function () {
 	});
 };
 
-
 /** 
   * Detect the actual types of the values that comprised the column and their frequency.
   * Returns a new column containing the type information.
@@ -24462,7 +24489,7 @@ BaseColumn.prototype.detectTypes = function () {
 	var LazyDataFrame = require('./lazydataframe');
 	return new LazyDataFrame(
 		function () {
-			return ["type", "frequency"];
+			return ["Type", "Frequency"];
 		},
 		function () {
 			var values = self.toValues();
@@ -24496,6 +24523,53 @@ BaseColumn.prototype.detectTypes = function () {
 						return [
 							valueType,
 							(typeFrequencies[valueType].count / totalValues) * 100
+						];
+					})
+					.toArray()
+			);
+		}
+	);
+};
+
+/** 
+  * Detect the frequency of values in the column.
+  * Returns a new column containing the information.
+  */
+BaseColumn.prototype.detectValues = function () {
+
+	var self = this;
+
+	var LazyDataFrame = require('./lazydataframe');
+	return new LazyDataFrame(
+		function () {
+			return ["Value", "Frequency"];
+		},
+		function () {
+			var values = self.toValues();
+			var totalValues = values.length;
+
+			var valueFrequencies = E.from(values)
+				.aggregate({}, function (accumulated, value) {
+					var valueKey = value.toString() + "-" + typeof(value);
+					var valueInfo = accumulated[valueKey];
+					if (!valueInfo) {
+						valueInfo = {
+							count: 0,
+							value: value,
+						};
+						accumulated[valueKey] = valueInfo;
+					}
+					++valueInfo.count;
+					return accumulated;
+				});
+
+			return new ArrayIterator(
+				E.from(Object.keys(valueFrequencies))
+					.select(function (valueKey) {
+						var valueInfo = valueFrequencies[valueKey];
+						return [
+							valueInfo.value,
+							(valueInfo.count / totalValues) * 100
 						];
 					})
 					.toArray()
@@ -25515,14 +25589,35 @@ BaseDataFrame.prototype.detectTypes = function () {
 			var numValues = column.toValues().length;
 			var Column = require('./column');
 			//todo: broad-cast column
-			var columnNameColumn = new Column('column', E.range(0, numValues).select(function () { return column.getName(); }).toArray());
-			return column.detectTypes().setColumn('column', columnNameColumn);
+			var columnNameColumn = new Column('Column', E.range(0, numValues).select(function () { return column.getName(); }).toArray());
+			return column.detectTypes().setColumn('Column', columnNameColumn);
 		})
 		.toArray();
 	var dataForge = require('../index');
-	return dataForge.concat(dataFrames);
+	return dataForge.concat(dataFrames).resetIndex();
 };
 
+/**
+ * Detect values and their frequencies contained within columns in the data frame.
+ */
+BaseDataFrame.prototype.detectValues = function () {
+
+	var self = this;
+
+	var DataFrame = require('./dataframe');
+
+	var dataFrames = E.from(self.getColumns())
+		.select(function (column) {
+			var numValues = column.toValues().length;
+			var Column = require('./column');
+			//todo: broad-cast column
+			var columnNameColumn = new Column('Column', E.range(0, numValues).select(function () { return column.getName(); }).toArray());
+			return column.detectValues().setColumn('Column', columnNameColumn);
+		})
+		.toArray();
+	var dataForge = require('../index');
+	return dataForge.concat(dataFrames).resetIndex();
+};
 /**
  * Produces a new data frame with all string values truncated to the requested maximum length.
  *
