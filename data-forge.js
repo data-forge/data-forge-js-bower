@@ -25946,6 +25946,40 @@ BaseDataFrame.prototype.count = function () {
 	return self.toValues().length; //todo: will be cheaper to just enumerate.
 };
 
+/**
+ * Transform a column. This is equivalent to extracting a column, calling 'select' on it,
+ * then plugging it back in as the same column.
+ *
+ * @param {string} columnName - Name of the column to transform.
+ * @param {function} selector - Selector function that transforms each row to a different data structure.
+ * 
+ */
+BaseDataFrame.prototype.transformColumn = function (columnNameOrColumnNames, selector) { //todo: this should support 'column name or index'.
+
+	var self = this;
+
+	if (Object.isObject(columnNameOrColumnNames)) {
+		var columnNames = Object.keys(columnNameOrColumnNames)
+		return E.from(columnNames)
+			.aggregate(self, function (prevDataFrame, columnName) {
+				var columnSelector = columnNameOrColumnNames[columnName];
+				return prevDataFrame.transformColumn(columnName, columnSelector);
+			});
+	}
+	else {
+		assert.isString(columnNameOrColumnNames, "Expected 'columnNameOrColumnNames' parameter to 'transformColumn' to be a string or object.");
+		assert.isFunction(selector, "Expected 'selector' parameter to 'transformColumn' to be a function.");
+
+		var columnName = columnNameOrColumnNames;
+		if (!self.hasSeries(columnName)) {
+			return self;
+		}
+
+		var transformedSeries = self.getSeries(columnName).select(selector);
+		return self.setSeries(columnName, transformedSeries);
+	}
+};
+
 module.exports = BaseDataFrame;
 },{"../index":7,"./column":52,"./dataframe":53,"./iterators/array":56,"./lazydataframe":57,"./lazyindex":58,"./lazyseries":59,"./series":60,"babyparse":8,"chai":9,"easy-table":45,"linq":46}],50:[function(require,module,exports){
 'use strict';
