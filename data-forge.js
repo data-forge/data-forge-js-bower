@@ -25980,8 +25980,67 @@ BaseDataFrame.prototype.transformColumn = function (columnNameOrColumnNames, sel
 	}
 };
 
+/** 
+ * Move a rolling window over the data frame, invoke a selector function to build a new data frame.
+ *
+ * @param {integer} period - The number of entries to include in the window.
+ * @param {function} selector - The selector function that builds the output series.
+ *
+ * The selector has the following parameters: 
+ *
+ *		window - Data-frame that represents the rolling window.
+ *		windowIndex - The 0-based index of the window.
+ */
+BaseDataFrame.prototype.rollingWindow = function (period, fn) {
+
+	assert.isNumber(period, "Expected 'period' parameter to 'rollingWindow' to be a number.");
+	assert.isFunction(fn, "Expected 'fn' parameter to 'rollingWindow' to be a function.");
+
+	var self = this;
+
+	//todo: make this properly lazy
+
+	var index = self.getIndex().toValues();
+	var values = self.toObjects();
+
+	var DataFrame = require('./dataframe');
+	if (values.length == 0) {
+		return new DataFrame();
+	}
+
+	var Index = require('./index');
+	var newIndexAndValues = E.range(0, values.length-period+1)
+		.select(function (rowIndex) {
+			var _index = E.from(index).skip(rowIndex).take(period).toArray();
+			var _values = E.from(values).skip(rowIndex).take(period).toArray();
+			var Series = require('./series');
+			var _window = new DataFrame({
+					rows: _values, 
+					index: new Index(_index)
+				});
+			return fn(_window, rowIndex);
+		})
+		.toArray();
+
+	var newIndex = E.from(newIndexAndValues)
+		.select(function (indexAndValue) {
+			return indexAndValue[0];
+		})
+		.toArray();
+	var newValues = E.from(newIndexAndValues)
+		.select(function (indexAndValue) {
+			return indexAndValue[1];
+		})
+		.toArray();
+
+	return new DataFrame({
+			rows: newValues,
+			index: new Index(newIndex)
+		});
+};
+
 module.exports = BaseDataFrame;
-},{"../index":7,"./column":52,"./dataframe":53,"./iterators/array":56,"./lazydataframe":57,"./lazyindex":58,"./lazyseries":59,"./series":60,"babyparse":8,"chai":9,"easy-table":45,"linq":46}],50:[function(require,module,exports){
+},{"../index":7,"./column":52,"./dataframe":53,"./index":54,"./iterators/array":56,"./lazydataframe":57,"./lazyindex":58,"./lazyseries":59,"./series":60,"babyparse":8,"chai":9,"easy-table":45,"linq":46}],50:[function(require,module,exports){
 'use strict';
 
 var ArrayIterator = require('./iterators/array');
@@ -26122,6 +26181,7 @@ var assert = require('chai').assert;
 var E = require('linq');
 var moment = require('moment');
 var ArrayIterator = require('./iterators/array');
+var Index = require('./index');
 
 //
 // Helper function to validate an iterator.
@@ -26543,10 +26603,15 @@ BaseSeries.prototype.getRowsSubset = function (startIndex, endIndex) {
 };
 
 /** 
- * Execute code over a moving window to produce a new data frame.
+ * Move a rolling window over the series, invoke a selector function to build a new series.
  *
  * @param {integer} period - The number of entries to include in the window.
- * @param {function} fn - The function to invoke on each window.
+ * @param {function} selector - The selector function that builds the output series.
+ *
+ * The selector has the following parameters: 
+ *
+ *		window - Series that represents the rolling window.
+ *		windowIndex - The 0-based index of the window.
  */
 BaseSeries.prototype.rollingWindow = function (period, fn) {
 
@@ -26569,7 +26634,9 @@ BaseSeries.prototype.rollingWindow = function (period, fn) {
 		.select(function (rowIndex) {
 			var _index = E.from(index).skip(rowIndex).take(period).toArray();
 			var _values = E.from(values).skip(rowIndex).take(period).toArray();
-			return fn(_index, _values, rowIndex);
+			var Series = require('./series'); //todo: use a lazy series for this.
+			var _window = new Series(_values, new Index(_index));
+			return fn(_window, rowIndex);
 		})
 		.toArray();
 
@@ -26685,10 +26752,13 @@ BaseSeries.prototype.toString = function () {
 BaseSeries.prototype.percentChange = function () {
 
 	var self = this;
-	return self.rollingWindow(2, function (index, window) {
-		var amountChange = window[1] - window[0]; // Compute amount of change.
-		var pctChange = amountChange / window[0]; // Compute % change.
-		return [index[1], pctChange]; // Return new index and value.
+	return self.rollingWindow(2, function (window) {
+		//todo: var index = window.getIndex().skip(1).first();
+		var index = window.getIndex().skip(1).toValues()[0];
+		var values = window.toValues();
+		var amountChange = values[1] - values[0]; // Compute amount of change.
+		var pctChange = amountChange / values[0]; // Compute % change.
+		return [index, pctChange]; // Return new index and value.
 	});
 };
 
@@ -26951,7 +27021,7 @@ BaseSeries.prototype.count = function () {
 
 
 module.exports = BaseSeries;
-},{"./iterators/array":56,"./lazydataframe":57,"./lazyindex":58,"./lazyseries":59,"./series":60,"chai":9,"easy-table":45,"linq":46,"moment":47}],52:[function(require,module,exports){
+},{"./index":54,"./iterators/array":56,"./lazydataframe":57,"./lazyindex":58,"./lazyseries":59,"./series":60,"chai":9,"easy-table":45,"linq":46,"moment":47}],52:[function(require,module,exports){
 'use strict';
 
 //
