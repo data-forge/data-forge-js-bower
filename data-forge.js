@@ -25943,7 +25943,16 @@ BaseDataFrame.prototype.bake = function () {
 BaseDataFrame.prototype.count = function () {
 
 	var self = this;
-	return self.toValues().length; //todo: will be cheaper to just enumerate.
+
+	var total = 0;
+
+	var iterator = self.getIterator();
+
+	while (iterator.moveNext()) {
+		++total;
+	}
+
+	return total;
 };
 
 /**
@@ -26037,6 +26046,102 @@ BaseDataFrame.prototype.rollingWindow = function (period, fn) {
 			rows: newValues,
 			index: new Index(newIndex)
 		});
+};
+
+/**
+ * Get the first row of the data frame.
+ */
+BaseDataFrame.prototype.first = function () {
+
+	var self = this;
+
+	var iterator = self.getIterator();
+
+	if (!iterator.moveNext()) {
+		throw new Error("No rows in data-frame.");
+	}
+
+	return mapRowByColumns(self, iterator.getCurrent());
+};
+
+/**
+ * Get the last row of the data frame.
+ */
+BaseDataFrame.prototype.last = function () {
+
+	var self = this;
+
+	var iterator = self.getIterator();
+
+	if (!iterator.moveNext()) {
+		throw new Error("No rows in data-frame.");
+	}
+
+	var last = iterator.getCurrent();
+
+	while (iterator.moveNext()) {
+		last = iterator.getCurrent();
+	}
+
+	return mapRowByColumns(self, last);
+};
+
+/** 
+ * Reverse the data-frame.
+ */
+BaseDataFrame.prototype.reverse = function () {
+
+	var self = this;
+
+	//todo: make this lazy.
+
+	var DataFrame = require('./dataframe');
+	return new DataFrame({
+			rows: E.from(self.toObjects()).reverse().toArray(),
+			index: self.getIndex().reverse()
+		});
+};
+
+/** 
+ * Generate new columns based on existing rows.
+ *
+ * @param {function} selector - Selector function that transforms each row to a new set of columns.
+ */
+BaseDataFrame.prototype.generateColumns = function (selector) {
+
+	assert.isFunction(selector, "Expected 'selector' parameter to 'generateColumns' function to be a function.");
+
+	var self = this;
+
+	//todo: make this lazy.
+	//todo: this should merge on index.
+
+	var newColumns = self.select(selector);
+	return E.from(newColumns.getColumnNames())
+		.aggregate(self, function (prevDataFrame, newColumnName) {
+			return prevDataFrame.setSeries(newColumnName, newColumns.getSeries(newColumnName));
+		});
+};
+
+/** 
+ * Deflate a data-frame to a series.
+ *
+ * @param {function} selector - Selector function that transforms each row to a new sequence of values.
+ */
+BaseDataFrame.prototype.deflate = function (selector) {
+
+	assert.isFunction(selector, "Expected 'selector' parameter to 'generateColumns' function to be a function.");
+
+	var self = this;
+
+	//todo: make this lazy.
+	
+	var newValues = E.from(self.toObjects())
+		.select(selector)
+		.toArray();
+
+	var Series = require('./series');
+	return new Series(newValues, self.getIndex());
 };
 
 module.exports = BaseDataFrame;
@@ -26166,8 +26271,65 @@ BaseIndex.prototype.bake = function () {
 BaseIndex.prototype.count = function () {
 
 	var self = this;
-	return self.toValues().length; //todo: will be cheaper to just enumerate.
+	var total = 0;
+	var iterator = self.getIterator();
+
+	while (iterator.moveNext()) {
+		++total;
+	}
+
+	return total;
 };
+
+/**
+ * Get the first row of the index.
+ */
+BaseIndex.prototype.first = function () {
+
+	var self = this;
+	var iterator = self.getIterator();
+
+	if (!iterator.moveNext()) {
+		throw new Error("No rows in index.");
+	}
+
+	return iterator.getCurrent();	
+};
+
+/**
+ * Get the last row of the index.
+ */
+BaseIndex.prototype.last = function () {
+
+	var self = this;
+	var iterator = self.getIterator();
+
+	if (!iterator.moveNext()) {
+		throw new Error("No rows in index.");
+	}
+
+	var last = iterator.getCurrent();
+
+	while (iterator.moveNext()) {
+		last = iterator.getCurrent();
+	}
+
+	return last;
+};
+
+/** 
+ * Reverse the index.
+ */
+BaseIndex.prototype.reverse = function () {
+
+	var self = this;
+
+	//todo: make this lazy.
+
+	var Index = require('./index');
+	return new Index(E.from(self.toValues()).reverse().toArray());
+};
+
 
 module.exports = BaseIndex;
 },{"./index":54,"./iterators/array":56,"./lazyindex":58,"chai":9,"linq":46}],51:[function(require,module,exports){
@@ -27016,12 +27178,99 @@ BaseSeries.prototype.toPairs = function () {
 BaseSeries.prototype.count = function () {
 
 	var self = this;
-	return self.toValues().length; //todo: will be cheaper to just enumerate.
+	var total = 0;
+	var iterator = self.getIterator();
+
+	while (iterator.moveNext()) {
+		++total;
+	}
+
+	return total;
 };
 
+/**
+ * Get the first row of the series.
+ */
+BaseSeries.prototype.first = function () {
+
+	var self = this;
+	var iterator = self.getIterator();
+
+	if (!iterator.moveNext()) {
+		throw new Error("No rows in series.");
+	}
+
+	return iterator.getCurrent();	
+};
+
+/**
+ * Get the last row of the series.
+ */
+BaseSeries.prototype.last = function () {
+
+	var self = this;
+	var iterator = self.getIterator();
+
+	if (!iterator.moveNext()) {
+		throw new Error("No rows in series.");
+	}
+
+	var last = iterator.getCurrent();
+
+	while (iterator.moveNext()) {
+		last = iterator.getCurrent();
+	}
+
+	return last;
+};
+
+/** 
+ * Reverse the series.
+ */
+BaseSeries.prototype.reverse = function () {
+
+	var self = this;
+
+	//todo: make this lazy.
+
+	var Series = require('./series');
+	return new Series(
+			E.from(self.toValues()).reverse().toArray(),
+			self.getIndex().reverse()
+		);
+};
+
+/** 
+ * Inflate a series to a data-frame.
+ *
+ * @param {function} selector - Selector function that transforms each value in the series to a row in the new data-frame.
+ */
+BaseSeries.prototype.inflate = function (selector) {
+
+	assert.isFunction(selector, "Expected 'selector' parameter to 'inflate' function to be a function.");
+
+	var self = this;
+
+	//todo: make this lazy.
+	//todo: need a better implementation.
+
+	var DataFrame = require('./dataframe');
+	return new DataFrame({
+			columnNames: ["__gen__"],
+			rows: E.from(self.toValues())
+				.select(function (value) {
+					return [value];
+				})
+				.toArray(),
+			index: self.getIndex(),
+		})
+		.select(function (row) {
+			return selector(row.__gen__);
+		});
+};
 
 module.exports = BaseSeries;
-},{"./index":54,"./iterators/array":56,"./lazydataframe":57,"./lazyindex":58,"./lazyseries":59,"./series":60,"chai":9,"easy-table":45,"linq":46,"moment":47}],52:[function(require,module,exports){
+},{"./dataframe":53,"./index":54,"./iterators/array":56,"./lazydataframe":57,"./lazyindex":58,"./lazyseries":59,"./series":60,"chai":9,"easy-table":45,"linq":46,"moment":47}],52:[function(require,module,exports){
 'use strict';
 
 //
