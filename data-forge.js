@@ -1865,10 +1865,10 @@ var dataForge = {
 	//
 	// Deserialize a data from a CSV text string.
 	//
-	fromCSV: function (csvTextString) {
+	fromCSV: function (csvTextString, config) {
 		assert.isString(csvTextString, "Expected 'csvTextString' parameter to 'dataForge.fromCSV' to be a string containing data encoded in the CSV format.");
 
-		var parsed = BabyParse.parse(csvTextString);
+		var parsed = BabyParse.parse(csvTextString, config);
 		var rows = parsed.data;
 		
 		/* Old csv parsing.
@@ -2034,7 +2034,7 @@ var dataForge = {
 };
 
 module.exports = dataForge;
-},{"./src/basedataframe":49,"./src/baseindex":50,"./src/baseseries":51,"./src/column":52,"./src/dataframe":53,"./src/index":54,"./src/iterators/array":56,"./src/lazydataframe":57,"./src/lazyindex":58,"./src/lazyseries":59,"./src/series":60,"./src/utils":61,"babyparse":8,"chai":9,"linq":46,"sugar":48}],8:[function(require,module,exports){
+},{"./src/basedataframe":49,"./src/baseindex":50,"./src/baseseries":51,"./src/column":52,"./src/dataframe":53,"./src/index":54,"./src/iterators/array":56,"./src/lazydataframe":59,"./src/lazyindex":60,"./src/lazyseries":61,"./src/series":62,"./src/utils":63,"babyparse":8,"chai":9,"linq":46,"sugar":48}],8:[function(require,module,exports){
 /*
 	Baby Parse
 	v0.4.1
@@ -24667,19 +24667,13 @@ var Column = require('./column');
 var LazySeries = require('./lazyseries');
 var LazyIndex = require('./lazyindex');
 var ArrayIterator = require('./iterators/array');
+var MultiIterator = require('./iterators/multi');
 var BabyParse = require('babyparse');
 
 var assert = require('chai').assert; 
 var E = require('linq');
 
-//
-// Helper function to validate an iterator.
-//
-var validateEnumerator = function (iterator) {
-	assert.isObject(iterator, "Expected an 'iterator' object.");
-	assert.isFunction(iterator.moveNext, "Expected iterator to have function 'moveNext'.");
-	assert.isFunction(iterator.getCurrent, "Expected iterator to have function 'getCurrent'.");
-};
+var validateIterator = require('./iterators/validate');
 
 //
 // Help function to grab a column index from a 'column name or index' parameter.
@@ -24791,6 +24785,98 @@ BaseDataFrame.prototype.skip = function (numRows) {
 };
 
 /**
+ * Skips rows in the data-frame while a condition is met.
+ *
+ * @param {function} predicate - Return true to indicate the condition met.
+ */
+BaseDataFrame.prototype.skipWhile = function (predicate) {
+	assert.isFunction(predicate, "Expected 'predicate' parameter to 'skipWhile' function to be a predicate function that returns true/false.");
+
+	var LazyDataFrame = require('./lazydataframe'); // Require here to prevent circular ref.	
+	var LazyIndex = require('./lazyindex'); // Require here to prevent circular ref.	
+	var self = this;
+	return new LazyDataFrame(
+		function () {
+			return self.getColumnNames();
+		},
+		function () {
+			var valueIterator = self.getIterator();
+			var skipped = false;
+			return {
+				moveNext: function () {
+					for (;;) {
+						if (!valueIterator.moveNext()) {
+							return false;
+						}
+
+						if (skipped) {
+							// Already skipped.
+							return true;
+						}
+
+						// Skipping until predict returns false.
+						if (!predicate(mapRowByColumns(self, valueIterator.getCurrent()))) {
+							skipped = true;
+							return true;
+						}
+					}
+				},
+
+				getCurrent: function () {
+					return valueIterator.getCurrent();
+				},
+			};
+		},
+		function () {
+			return new LazyIndex(
+				function () {
+					var multiIterator = new MultiIterator([self.getIndex(), self]);
+					var skipped = false;
+					return {
+						moveNext: function () {
+							for (;;) {
+								if (!multiIterator.moveNext()) {
+									return false;
+								}
+
+								if (skipped) {
+									// Already skipped.
+									return true;
+								}
+
+								// Skipping until predict returns false.
+								var currentValue = multiIterator.getCurrent();
+								if (!predicate(mapRowByColumns(self, currentValue[1]))) {
+									skipped = true;
+									return true;
+								}
+							}
+						},
+
+						getCurrent: function () {
+							var currentValue = multiIterator.getCurrent();
+							return currentValue[0]; // Return the value of the index.
+						},
+					};				
+				}
+			)
+		}
+	); 	
+};
+
+/**
+ * Skips rows in the data-frame until a condition is met.
+ *
+ * @param {function} predicate - Return true to indicate the condition met.
+ */
+BaseDataFrame.prototype.skipUntil = function (predicate) {
+	assert.isFunction(predicate, "Expected 'predicate' parameter to 'skipUntil' function to be a predicate function that returns true/false.");
+
+	var self = this;
+	return self.skipWhile(function (value) { return !predicate(value); });
+};
+
+/**
  * Take a number of rows in the data frame.
  *
  * @param {int} numRows - Number of rows to take.
@@ -24825,6 +24911,90 @@ BaseDataFrame.prototype.take = function (numRows) {
 			return self.getIndex().take(numRows);
 		}
 	); 	
+};
+
+/**
+ * Take rows from the data-frame while a condition is met.
+ *
+ * @param {function} predicate - Return true to indicate the condition met.
+ */
+BaseDataFrame.prototype.takeWhile = function (predicate) {
+	assert.isFunction(predicate, "Expected 'predicate' parameter to 'takeWhile' function to be a predicate function that returns true/false.");
+
+	var LazyDataFrame = require('./lazydataframe'); // Require here to prevent circular ref.	
+	var LazyIndex = require('./lazyindex'); // Require here to prevent circular ref.	
+	var self = this;
+	return new LazyDataFrame(
+		function () {
+			return self.getColumnNames();
+		},
+		function () {
+			var valueIterator = self.getIterator();
+			var taking = true;
+			return {
+				moveNext: function () {
+					if (!taking) {
+						return false;
+					}
+
+					if (!valueIterator.moveNext()) {
+						return false;
+					}
+
+					if (!predicate(mapRowByColumns(self, valueIterator.getCurrent()))) {
+						taking = false;
+						return false;
+					}
+
+					return true;
+				},
+
+				getCurrent: function () {
+					return valueIterator.getCurrent();
+				},
+			};
+		},
+		function () {
+			return new LazyIndex(
+				function () {
+					var multiIterator = new MultiIterator([self.getIndex(), self]);
+					var taking = true;
+					return {
+						moveNext: function () {
+							if (!multiIterator.moveNext()) {
+								return false;
+							}
+
+							var currentValue = multiIterator.getCurrent();
+							if (!predicate(mapRowByColumns(self, currentValue[1]))) {
+								taking = false;
+								return false;
+							}
+
+							return true;
+						},
+
+						getCurrent: function () {
+							var currentValue = multiIterator.getCurrent();
+							return currentValue[0]; // Return just the index.
+						},
+					};				
+				}
+			)
+		}
+	); 	
+};
+
+/**
+ * Take rows from the data-frame until a condition is met.
+ *
+ * @param {function} predicate - Return true to indicate the condition met.
+ */
+BaseDataFrame.prototype.takeUntil = function (predicate) {
+	assert.isFunction(predicate, "Expected 'predicate' parameter to 'takeUntil' function to be a predicate function that returns true/false.");
+
+	var self = this;
+	return self.takeWhile(function (value) { return !predicate(value); });
 };
 
 /**
@@ -25837,7 +26007,7 @@ BaseDataFrame.prototype.toValues = function () {
 	var self = this;
 
 	var iterator = self.getIterator();
-	validateEnumerator(iterator);
+	validateIterator(iterator);
 
 	var values = [];
 
@@ -26130,7 +26300,7 @@ BaseDataFrame.prototype.generateColumns = function (selector) {
  */
 BaseDataFrame.prototype.deflate = function (selector) {
 
-	assert.isFunction(selector, "Expected 'selector' parameter to 'generateColumns' function to be a function.");
+	assert.isFunction(selector, "Expected 'selector' parameter to 'deflate' function to be a function.");
 
 	var self = this;
 
@@ -26144,8 +26314,34 @@ BaseDataFrame.prototype.deflate = function (selector) {
 	return new Series(newValues, self.getIndex());
 };
 
+/** 
+ * Get X rows from the head of the data frame.
+ *
+ * @param {int} numRows - Number of rows to take.
+ */
+BaseDataFrame.prototype.head = function (numRows) {
+
+	assert.isNumber(numRows, "Expected 'numRows' parameter to 'head' function to be a function.");
+
+	var self = this;
+	return self.take(numRows);
+};
+
+/** 
+ * Get X rows from the tail of the data frame.
+ *
+ * @param {int} numRows - Number of rows to take.
+ */
+BaseDataFrame.prototype.tail = function (numRows) {
+
+	assert.isNumber(numRows, "Expected 'numRows' parameter to 'tail' function to be a function.");
+
+	var self = this;
+	return self.skip(self.count() - numRows);
+};
+
 module.exports = BaseDataFrame;
-},{"../index":7,"./column":52,"./dataframe":53,"./index":54,"./iterators/array":56,"./lazydataframe":57,"./lazyindex":58,"./lazyseries":59,"./series":60,"babyparse":8,"chai":9,"easy-table":45,"linq":46}],50:[function(require,module,exports){
+},{"../index":7,"./column":52,"./dataframe":53,"./index":54,"./iterators/array":56,"./iterators/multi":57,"./iterators/validate":58,"./lazydataframe":59,"./lazyindex":60,"./lazyseries":61,"./series":62,"babyparse":8,"chai":9,"easy-table":45,"linq":46}],50:[function(require,module,exports){
 'use strict';
 
 var ArrayIterator = require('./iterators/array');
@@ -26153,14 +26349,7 @@ var ArrayIterator = require('./iterators/array');
 var assert = require('chai').assert;
 var E = require('linq');
 
-//
-// Helper function to validate an iterator.
-//
-var validateEnumerator = function (iterator) {
-	assert.isObject(iterator, "Expected an 'iterator' object.");
-	assert.isFunction(iterator.moveNext, "Expected iterator to have function 'moveNext'.");
-	assert.isFunction(iterator.getCurrent, "Expected iterator to have function 'getCurrent'.");
-};
+var validateIterator = require('./iterators/validate');
 
 /**
  * Base class for indexes.
@@ -26243,7 +26432,7 @@ BaseIndex.prototype.toValues = function () {
 
 	var self = this;
 	var iterator = self.getIterator();
-	validateEnumerator(iterator);
+	validateIterator(iterator);
 
 	var values = [];
 
@@ -26330,9 +26519,34 @@ BaseIndex.prototype.reverse = function () {
 	return new Index(E.from(self.toValues()).reverse().toArray());
 };
 
+/** 
+ * Get X values from the head of the index.
+ *
+ * @param {int} values - Number of values to take.
+ */
+BaseIndex.prototype.head = function (values) {
+
+	assert.isNumber(values, "Expected 'values' parameter to 'head' function to be a function.");
+
+	var self = this;
+	return self.take(values);
+};
+
+/** 
+ * Get X values from the tail of the index.
+ *
+ * @param {int} values - Number of values to take.
+ */
+BaseIndex.prototype.tail = function (values) {
+
+	assert.isNumber(values, "Expected 'values' parameter to 'tail' function to be a function.");
+
+	var self = this;
+	return self.skip(self.count() - values);
+};
 
 module.exports = BaseIndex;
-},{"./index":54,"./iterators/array":56,"./lazyindex":58,"chai":9,"linq":46}],51:[function(require,module,exports){
+},{"./index":54,"./iterators/array":56,"./iterators/validate":58,"./lazyindex":60,"chai":9,"linq":46}],51:[function(require,module,exports){
 'use strict';
 
 // 
@@ -26345,14 +26559,7 @@ var moment = require('moment');
 var ArrayIterator = require('./iterators/array');
 var Index = require('./index');
 
-//
-// Helper function to validate an iterator.
-//
-var validateIterator = function (iterator) {
-	assert.isObject(iterator, "Expected an 'iterator' object.");
-	assert.isFunction(iterator.moveNext, "Expected iterator to have function 'moveNext'.");
-	assert.isFunction(iterator.getCurrent, "Expected iterator to have function 'getCurrent'.");
-};
+var validateIterator = require('./iterators/validate');
 
 /**
  * Base class for series.
@@ -26388,6 +26595,92 @@ BaseSeries.prototype.skip = function (numRows) {
 };
 
 /**
+ * Skips values in the series while a condition is met.
+ *
+ * @param {function} predicate - Return true to indicate the condition met.
+ */
+BaseSeries.prototype.skipWhile = function (predicate) {
+	assert.isFunction(predicate, "Expected 'predicate' parameter to 'skipWhile' function to be a predicate function that returns true/false.");
+
+	var LazySeries = require('./lazyseries'); // Require here to prevent circular ref.	
+	var LazyIndex = require('./lazyindex'); // Require here to prevent circular ref.	
+	var self = this;
+	return new LazySeries(
+		function () {
+			var valueIterator = self.getIterator();
+			var skipped = false;
+			return {
+				moveNext: function () {
+					for (;;) {
+						if (!valueIterator.moveNext()) {
+							return false;
+						}
+
+						if (skipped) {
+							// Already skipped.
+							return true;
+						}
+
+						// Skipping until predict returns false.
+						if (!predicate(valueIterator.getCurrent())) {
+							skipped = true;
+							return true;
+						}
+					}
+				},
+
+				getCurrent: function () {
+					return valueIterator.getCurrent();
+				},
+			};
+		},
+		new LazyIndex(
+			function () { //too: can use an iterator here that moves multiple iterators in tandem.
+				var indexIterator = self.getIndex().getIterator();
+				var valueIterator = self.getIterator();
+				var skipped = false;
+				return {
+					moveNext: function () {
+						for (;;) {
+							if (!valueIterator.moveNext() || !indexIterator.moveNext()) {
+								return false;
+							}
+
+							if (skipped) {
+								// Already skipped.
+								return true;
+							}
+
+							// Skipping until predict returns false.
+							if (!predicate(valueIterator.getCurrent())) {
+								skipped = true;
+								return true;
+							}
+						}
+					},
+
+					getCurrent: function () {
+						return indexIterator.getCurrent();
+					},
+				};				
+			}
+		)
+	); 	
+};
+
+/**
+ * Skips values in the series until a condition is met.
+ *
+ * @param {function} predicate - Return true to indicate the condition met.
+ */
+BaseSeries.prototype.skipUntil = function (predicate) {
+	assert.isFunction(predicate, "Expected 'predicate' parameter to 'skipUntil' function to be a predicate function that returns true/false.");
+
+	var self = this;
+	return self.skipWhile(function (value) { return !predicate(value); });
+};
+
+/**
  * Take a number of rows in the series.
  *
  * @param {int} numRows - Number of rows to take.
@@ -26408,6 +26701,84 @@ BaseSeries.prototype.take = function (numRows) {
 		},
 		self.getIndex().take(numRows)
 	); 	
+};
+
+/**
+ * Take values from the series while a condition is met.
+ *
+ * @param {function} predicate - Return true to indicate the condition met.
+ */
+BaseSeries.prototype.takeWhile = function (predicate) {
+	assert.isFunction(predicate, "Expected 'predicate' parameter to 'takeWhile' function to be a predicate function that returns true/false.");
+
+	var LazySeries = require('./lazyseries'); // Require here to prevent circular ref.	
+	var LazyIndex = require('./lazyindex'); // Require here to prevent circular ref.	
+	var self = this;
+	return new LazySeries(
+		function () {
+			var valueIterator = self.getIterator();
+			var taking = true;
+			return {
+				moveNext: function () {
+					if (!taking) {
+						return false;
+					}
+
+					if (!valueIterator.moveNext()) {
+						return false;
+					}
+
+					if (!predicate(valueIterator.getCurrent())) {
+						taking = false;
+						return false;
+					}
+
+					return true;
+				},
+
+				getCurrent: function () {
+					return valueIterator.getCurrent();
+				},
+			};
+		},
+		new LazyIndex(
+			function () { //too: can use an iterator here that moves multiple iterators in tandem.
+				var indexIterator = self.getIndex().getIterator();
+				var valueIterator = self.getIterator();
+				var taking = true;
+				return {
+					moveNext: function () {
+						if (!valueIterator.moveNext() || !indexIterator.moveNext()) {
+							return false;
+						}
+
+						if (!predicate(valueIterator.getCurrent())) {
+							taking = false;
+							return false;
+						}
+
+						return true;
+					},
+
+					getCurrent: function () {
+						return indexIterator.getCurrent();
+					},
+				};				
+			}
+		)
+	); 	
+};
+
+/**
+ * Take values from the series until a condition is met.
+ *
+ * @param {function} predicate - Return true to indicate the condition met.
+ */
+BaseSeries.prototype.takeUntil = function (predicate) {
+	assert.isFunction(predicate, "Expected 'predicate' parameter to 'takeUntil' function to be a predicate function that returns true/false.");
+
+	var self = this;
+	return self.takeWhile(function (value) { return !predicate(value); });
 };
 
 /**
@@ -27269,8 +27640,36 @@ BaseSeries.prototype.inflate = function (selector) {
 		});
 };
 
+/** 
+ * Get X values from the head of the series.
+ *
+ * @param {int} values - Number of values to take.
+ */
+BaseSeries.prototype.head = function (values) {
+
+	assert.isNumber(values, "Expected 'values' parameter to 'head' function to be a function.");
+
+	var self = this;
+	return self.take(values);
+};
+
+/** 
+ * Get X values from the tail of the series.
+ *
+ * @param {int} values - Number of values to take.
+ */
+BaseSeries.prototype.tail = function (values) {
+
+	assert.isNumber(values, "Expected 'values' parameter to 'tail' function to be a function.");
+
+	var self = this;
+	return self.skip(self.count() - values);
+};
+
+
+
 module.exports = BaseSeries;
-},{"./dataframe":53,"./index":54,"./iterators/array":56,"./lazydataframe":57,"./lazyindex":58,"./lazyseries":59,"./series":60,"chai":9,"easy-table":45,"linq":46,"moment":47}],52:[function(require,module,exports){
+},{"./dataframe":53,"./index":54,"./iterators/array":56,"./iterators/validate":58,"./lazydataframe":59,"./lazyindex":60,"./lazyseries":61,"./series":62,"chai":9,"easy-table":45,"linq":46,"moment":47}],52:[function(require,module,exports){
 'use strict';
 
 //
@@ -27342,7 +27741,7 @@ Column.prototype.toString = function () {
 };
 
 module.exports = Column;
-},{"./inherit":55,"./iterators/array":56,"./lazyindex":58,"chai":9,"easy-table":45,"linq":46}],53:[function(require,module,exports){
+},{"./inherit":55,"./iterators/array":56,"./lazyindex":60,"chai":9,"easy-table":45,"linq":46}],53:[function(require,module,exports){
 'use strict';
 
 //
@@ -27475,7 +27874,7 @@ DataFrame.prototype.getIterator = function () {
 //todo: could override the get values fn... here just return the already baked values.
 
 module.exports = DataFrame;
-},{"./basedataframe":49,"./inherit":55,"./iterators/array":56,"./lazyindex":58,"chai":9,"fs":1,"linq":46}],54:[function(require,module,exports){
+},{"./basedataframe":49,"./inherit":55,"./iterators/array":56,"./lazyindex":60,"chai":9,"fs":1,"linq":46}],54:[function(require,module,exports){
 'use strict';
 
 var BaseIndex = require('./baseindex');
@@ -27548,12 +27947,101 @@ var ArrayIterator = function (arr) {
 	};
 
 	self.getCurrent = function () {
-		return arr[rowIndex];
+		if (rowIndex >= 0 && rowIndex < arr.length) {
+			return arr[rowIndex];
+		}
+		else {
+			return undefined;
+		}		
 	};
 };
 
 module.exports = ArrayIterator;
 },{"chai":9}],57:[function(require,module,exports){
+'use strict';
+
+var assert = require('chai').assert;
+var E = require('linq');
+
+var validateIterator = require('./validate');
+
+
+//
+// An iterator that can step multiple other iterators at once.
+//
+var MultiIterator = function (iterables) {
+	assert.isArray(iterables);
+
+	iterables.forEach(function (iterable) {
+		assert.isObject(iterable);
+		assert.isFunction(iterable.getIterator);
+	});
+
+	var self = this;
+	var iterators = null;
+
+	var lazyInit = function () {
+		if (!iterators) {
+			iterators = E.from(iterables)
+				.select(function (iterable) {
+					var iterator = iterable.getIterator();
+					validateIterator(iterator);
+					return iterator;
+				})
+				.toArray();
+		}
+	}
+
+	var ok = false;
+
+	//
+	// Move all iterators to the next element.
+	// Returns false when complete and there are no more elements.
+	// Completes when first iterator completes.
+	//	
+	self.moveNext = function () {				
+		lazyInit();
+
+		if (iterators.length > 0) {
+			ok = E.from(iterators)
+					.select(function (iterator) {
+						return iterator.moveNext();
+					})
+					.all();
+		}
+
+		return ok;
+	};
+
+	self.getCurrent = function () {
+		if (ok) {
+			return E.from(iterators)
+				.select(function (iterator) {
+					return iterator.getCurrent();
+				})
+				.toArray();
+		}
+		else {
+			return undefined;
+		}
+	};
+};
+
+module.exports = MultiIterator;
+},{"./validate":58,"chai":9,"linq":46}],58:[function(require,module,exports){
+'use strict';
+
+var assert = require('chai').assert;
+
+//
+// Validate an iterator.
+//
+module.exports = function (iterator) {
+	assert.isObject(iterator, "Expected an 'iterator' object.");
+	assert.isFunction(iterator.moveNext, "Expected iterator to have function 'moveNext'.");
+	assert.isFunction(iterator.getCurrent, "Expected iterator to have function 'getCurrent'.");
+};
+},{"chai":9}],59:[function(require,module,exports){
 'use strict';
 
 //
@@ -27618,7 +28106,7 @@ LazyDataFrame.prototype.getIterator = function () {
 };
 
 module.exports = LazyDataFrame;
-},{"./basedataframe":49,"./inherit":55,"./iterators/array":56,"./lazyindex":58,"chai":9,"linq":46}],58:[function(require,module,exports){
+},{"./basedataframe":49,"./inherit":55,"./iterators/array":56,"./lazyindex":60,"chai":9,"linq":46}],60:[function(require,module,exports){
 'use strict';
 
 var BaseIndex = require('./baseindex');
@@ -27649,7 +28137,7 @@ LazyIndex.prototype.getIterator = function () {
 };
 
 module.exports = LazyIndex;
-},{"./baseindex":50,"./inherit":55,"./iterators/array":56,"chai":9,"linq":46}],59:[function(require,module,exports){
+},{"./baseindex":50,"./inherit":55,"./iterators/array":56,"chai":9,"linq":46}],61:[function(require,module,exports){
 'use strict';
 
 //
@@ -27704,7 +28192,7 @@ LazySeries.prototype.getIndex = function () {
 };
 
 module.exports = LazySeries;
-},{"./baseseries":51,"./inherit":55,"./iterators/array":56,"./lazyindex":58,"chai":9,"linq":46}],60:[function(require,module,exports){
+},{"./baseseries":51,"./inherit":55,"./iterators/array":56,"./lazyindex":60,"chai":9,"linq":46}],62:[function(require,module,exports){
 'use strict';
 
 //
@@ -27758,7 +28246,7 @@ Series.prototype.getIndex = function () {
 };
 
 module.exports = Series;
-},{"./baseseries":51,"./inherit":55,"./iterators/array":56,"./lazyindex":58,"chai":9,"linq":46}],61:[function(require,module,exports){
+},{"./baseseries":51,"./inherit":55,"./iterators/array":56,"./lazyindex":60,"chai":9,"linq":46}],63:[function(require,module,exports){
 'use strict';
 
 var E = require('linq');
