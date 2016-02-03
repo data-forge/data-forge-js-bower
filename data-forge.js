@@ -26199,8 +26199,8 @@ BaseDataFrame.prototype.rollingWindow = function (period, fn) {
 		})
 		.toArray();
 
-	return new DataFrame({
-			rows: newValues,
+	return new Series({
+			values: newValues,
 			index: new Index(newIndex)
 		});
 };
