@@ -1815,6 +1815,11 @@ var Series = require('./src/series');
 var Index = require('./src/index');
 var E = require('linq');
 
+//
+// Records plugins that have been registered.
+//
+var registeredPlugins = {};
+
 /**
  * Main namespace for Data-Forge.
  * 
@@ -1842,6 +1847,12 @@ var dataForge = {
 	use: function (plugin) {
 
 		assert.isFunction(plugin, "Expected 'plugin' parameter to 'use' to be a function.");
+
+		if (registeredPlugins[plugin] === plugin) {
+			return; // Already registered.
+		}
+
+		registeredPlugins[plugin] = plugin;
 
 		var self = this;
 		plugin(self);
@@ -2016,7 +2027,7 @@ var dataForge = {
 
 		return new DataFrame({
 			columnNames: concatenateColumns(),
-			rows: function () {
+			iterable: function () {
 				var concatenatedColumns = concatenateColumns();
 				var iterators = E.from(dataFrames)
 					.select(function (dataFrame) {
@@ -2028,17 +2039,6 @@ var dataForge = {
 					.toArray()
 				return new ConcatIterator(iterators);
 			},
-			index: new Index(function () {
-				var indexIterators = E.from(dataFrames)
-					.select(function (dataFrame) {
-						return dataFrame.getIndex();
-					})
-					.select(function (index) {
-						return index.getIterator();
-					})
-					.toArray();
-				return new ConcatIterator(indexIterators);
-			}),
 		});
 	},
 
@@ -2058,7 +2058,7 @@ var dataForge = {
 
 					var i = -1;
 
-					return {
+					return { //todo: should have a range iterator.
 						moveNext: function () {
 							return ++i < count;
 						},
@@ -2066,6 +2066,7 @@ var dataForge = {
 						getCurrent: function () {
 							return start + i;
 						},
+
 					};
 				},
 			});
@@ -2082,19 +2083,32 @@ var dataForge = {
 		assert.isArray(series, "Expected 'series' parameter to zipSeries to be an array of Series objects.");
 		assert.isFunction(selector, "Expected 'selector' parameter to zipSeries to be a function.");
 
+		//todo: make this lazy.
+
+		var seriesToZip = E.from(series)
+			.select(function (series) {
+				return series.toValues();
+			})
+			.toArray();
+
+		var length = E.from(seriesToZip).select(function (values) { 
+				return values.length; 
+			})
+			.min();
+
+		var output = [];
+
+		for (var i = 0; i < length; ++i) {
+			var curElements = E.from(seriesToZip)
+				.select(function (values) {
+					return values[i];
+				})
+				.toArray();
+			output.push(selector(curElements));
+		}
+
 		return new Series({
-			values: function () {
-				return new SelectIterator(
-					new MultiIterator(
-						E.from(series)
-							.select(function (series) {
-								return series.getIterator();
-							})
-							.toArray()
-					),
-					selector
-				);
-			},
+			values: output,
 		});
 	},
 
@@ -2109,25 +2123,38 @@ var dataForge = {
 		assert.isArray(dataFrames, "Expected 'dataFrames' parameter to zipDataFrames to be an array of Series objects.");
 		assert.isFunction(selector, "Expected 'selector' parameter to zipDataFrames to be a function.");
 
-		return new DataFrame({
-			rows: function () {
-				var dataFrameIterators = E.from(dataFrames)
-					.select(function (dataFrame) {
-						return dataFrame.getObjectsIterator();
-					})
-					.toArray();
+		//todo: make this lazy.
 
-				return new SelectIterator(
-					new MultiIterator(dataFrameIterators),
-					selector
-				);
-			},
+		var dataFrameContents = E.from(dataFrames)
+			.select(function (dataFrame) {
+				return dataFrame.toObjects();
+			})
+			.toArray();
+
+		var length = E.from(dataFrameContents).select(function (objects) { 
+				return objects.length; 
+			})
+			.min();
+
+		var output = [];
+
+		for (var i = 0; i < length; ++i) {
+			var curElements = E.from(dataFrameContents)
+				.select(function (objects) {
+					return objects[i];
+				})
+				.toArray();
+			output.push(selector(curElements));
+		}
+
+		return new DataFrame({
+			rows: output,
 		});
 	},	
 };
 
 module.exports = dataForge;
-},{"./src/dataframe":49,"./src/index":50,"./src/iterators/array":51,"./src/iterators/concat":52,"./src/iterators/multi":53,"./src/iterators/select":54,"./src/series":60,"./src/utils":61,"babyparse":7,"chai":8,"linq":46,"sugar":48}],7:[function(require,module,exports){
+},{"./src/dataframe":49,"./src/index":50,"./src/iterators/array":51,"./src/iterators/concat":52,"./src/iterators/multi":55,"./src/iterators/select":57,"./src/series":64,"./src/utils":65,"babyparse":7,"chai":8,"linq":46,"sugar":48}],7:[function(require,module,exports){
 /*
 	Baby Parse
 	v0.4.1
@@ -24852,8 +24879,12 @@ var SkipIterator = require('./iterators/skip');
 var SkipWhileIterator = require('./iterators/skip-while');
 var BabyParse = require('babyparse');
 var SelectIterator = require('../src/iterators/select');
+var SelectManyIterator = require('../src/iterators/select-many');
 var TakeIterator = require('../src/iterators/take');
 var TakeWhileIterator = require('../src/iterators/take-while');
+var WhereIterator = require('../src/iterators/where');
+var CountIterator = require('../src/iterators/count');
+var EmptyIterator = require('../src/iterators/empty');
 var utils = require('./utils');
 var extend = require('extend');
 
@@ -24863,9 +24894,9 @@ var E = require('linq');
 var validateIterator = require('./iterators/validate');
 
 //
-// Help function to grab a column index from a 'column name or index' parameter.
+// Helper function to grab a column index from a 'column name or index' parameter.
 //
-var parseColumnNameOrIndex = function (dataFrame, columnNameOrIndex, failForNonExistantColumn) {
+var parseColumnNameOrIndexToIndex = function (dataFrame, columnNameOrIndex, failForNonExistantColumn) {
 
 	if (Object.isString(columnNameOrIndex)) {
 		var columnIndex = dataFrame.getColumnIndex(columnNameOrIndex);
@@ -24875,9 +24906,21 @@ var parseColumnNameOrIndex = function (dataFrame, columnNameOrIndex, failForNonE
 		return columnIndex;
 	}
 	else {	
-		assert.isNumber(columnNameOrIndex, "Expected 'columnNameOrIndex' parameter e either a string or index that specifies an existing column.");
+		assert.isNumber(columnNameOrIndex, "Expected 'columnNameOrIndex' parameter to be either a string or index that specifies an existing column.");
 
 		return columnNameOrIndex;
+	}
+};
+
+var parseColumnNameOrIndexToName = function (dataFrame, columnNameOrIndex, failForNonExistantColumn) {
+
+	if (Object.isString(columnNameOrIndex)) {
+		return columnNameOrIndex;
+	}
+	else {	
+		assert.isNumber(columnNameOrIndex, "Expected 'columnNameOrIndex' parameter to be either a string or index that specifies an existing column.");
+
+		return dataFrame.getColumnName(columnNameOrIndex);
 	}
 };
 
@@ -24889,164 +24932,230 @@ var parseColumnNameOrIndex = function (dataFrame, columnNameOrIndex, failForNonE
 var DataFrame = function (config) {
 
 	var self = this;
-	var columnNames;
-	var rows;
 
-	if (config) {
-		assert.isObject(config, "Expected 'config' parameter to DataFrame constructor to be an object with options for initialisation.");
+	if (!config) {
+		self._columnNames = [];
+		self._iterable = function () {
+			return new EmptyIterator();
+		};
+		return;
+	}
 
-		if (config.index) {
-			assert.isObject(config.index, "Expected 'index' member of 'config' parameter to DataFrame constructor to be an object.");
-		}
+	if (config && config.iterable) {
 
-		if (config.iterable) {
-			assert.isObject(config.iterable, "Expected 'iterable' member of 'config' parameter to DataFrame constructor to be an object.");
+		assert.isFunction(config.iterable, "Expected 'iterable' field of 'config' parameter to DataFrame constructor to be a function that returns an index/value pairs iterator.");
 
-			self._newIterable = config.iterable;
-		}
+		var iterable = config.iterable;
+
 		if (config.columnNames) {
 			if (!Object.isFunction(config.columnNames)) {
-				assert.isArray(config.columnNames, "Expected 'columnNames' member of 'config' parameter to DataFrame constructor to be an array of strings or a function that produces an array of strings.");
+				assert.isArray(config.columnNames, "Expected 'columnNames' field of 'config' parameter to DataFrame constructor to be an array of column names or function that returns an array of column names.");
+			};
 
-				config.columnNames.forEach(function (columnName) {
-					assert.isString(columnName, "Expected 'columnNames' member of 'config' parameter to DataFrame constructor to be an array of strings or a function that produces an array of strings.");
+			self._columnNames = config.columnNames;
+		}
+		else {
+			self._columnNames = function () { //todo: could just make this the default behavior if no columns are specified ?!
+				var iterator = iterable();
+				if (!iterator.moveNext()) {
+					return [];
+				}
+
+				return Object.keys(iterator.getCurrent()[1]);
+			};
+		}
+		self._iterable = iterable;
+		return;
+	}
+
+	var columnNames;
+	var rows;
+	var index;
+
+	assert.isObject(config, "Expected 'config' parameter to DataFrame constructor to be an object with options for initialisation.");
+
+	if (config.index) {
+		var inputIndex = config.index;
+
+		if (Object.isArray(inputIndex)) {
+			index = function () {
+				return new ArrayIterator(inputIndex);
+			};		
+		}
+		else {
+			assert.isObject(config.index, "Expected 'index' member of 'config' parameter to DataFrame constructor to be an object.");			
+
+			index = function () {
+				return inputIndex.getIterator();
+			};
+		}
+	}
+	else {
+		index = function () {
+			return new CountIterator();
+		};
+	}
+
+	if (config.columnNames) {
+		if (!Object.isFunction(config.columnNames)) {
+			assert.isArray(config.columnNames, "Expected 'columnNames' member of 'config' parameter to DataFrame constructor to be an array of strings or a function that produces an array of strings.");
+
+			config.columnNames.forEach(function (columnName) {
+				assert.isString(columnName, "Expected 'columnNames' member of 'config' parameter to DataFrame constructor to be an array of strings or a function that produces an array of strings.");
+			});
+		}
+
+		if (!config.rows) {
+			throw new Error("Expected to find a 'rows' member of 'config' parameter to DataFrame constructor.");
+		}
+
+		columnNames = config.columnNames;
+
+	 	if (Object.isFunction(config.rows)) {
+			rows = function () {
+				return new SelectIterator(
+					config.rows(),
+					function (row) {
+						return E.from(columnNames)
+							.select(function (columnName, columnIndex) {
+								return [columnName, columnIndex];
+							})
+							.toObject(
+								function (column) {
+									return column[0];
+								},
+								function (column) {
+									return row[column[1]];
+								}
+							);							
+					}
+				);
+			};
+		}
+		else {
+			assert.isArray(config.rows, "Expected 'rows' member of 'config' parameter to DataFrame constructor to be an array of rows.");
+
+			if (config.debug) {
+				config.rows.forEach(function (row) {
+					assert.isArray(row, "Expected 'rows' member of 'config' parameter to DataFrame constructor to be an array of arrays, an array of objects or an iterator.");
 				});
 			}
 
-			if (!config.rows) {
-				throw new Error("Expected to find a 'rows' member of 'config' parameter to DataFrame constructor.");
-			}
-
-			columnNames = config.columnNames;
-
-		 	if (Object.isFunction(config.rows)) {
-				rows = config.rows;
-			}
-			else {
-				assert.isArray(config.rows, "Expected 'rows' member of 'config' parameter to DataFrame constructor to be an array of rows.");
-
-				if (config.debug) {
-					config.rows.forEach(function (row) {
-						assert.isArray(row, "Expected 'rows' member of 'config' parameter to DataFrame constructor to be an array of arrays, an array of objects or an iterator.");
-					});
-				}
-
-		 		rows = function () {
-					return new ArrayIterator(config.rows);
-		 		};		 		
-			}
-		}
-		else if (config.rows) {
-			if (Object.isFunction(config.rows)) {
-
-				var determineColumnNames = function () {
-					var iterator = config.rows();
-					if (!iterator.moveNext()) {
-						return [];
-					}
-
-					return Object.keys(iterator.getCurrent());
-				};				
-
-				columnNames = determineColumnNames;
-
-				rows = function () {
-					var columnNames = determineColumnNames();
-
-					return new SelectIterator(
-						config.rows(),
-						function (row) {
-							return E.from(columnNames)
-								.select(function (columnNames) {
-									return row[columnNames];
-								})
-								.toArray();
+	 		rows = function () {
+				return new SelectIterator(
+					new ArrayIterator(config.rows),
+					function (row) {
+						var resolvedColumnNames = columnNames;
+						if (Object.isFunction(resolvedColumnNames)) {
+							resolvedColumnNames = resolvedColumnNames();
 						}
-					);
-				};
-			}
-			else {
-				assert.isArray(config.rows, "Expected 'rows' member of 'config' parameter to DataFrame constructor to be an array of rows.");
-				
-				if (config.rows.length > 0) {
-					if (Object.isObject(config.rows[0])) {
-
-						if (config.debug) {
-							config.rows.forEach(function (row) {
-								assert.isObject(row, "Expect 'rows' member of 'config' parameter to DataFrame constructor to be array of objects or arrays, do not mix and match arrays and objects in 'rows'.");
-							});							
-						}
-
-						// Derive column names from object fields.
-						columnNames = function () {
-							return E.from(config.rows)
-								.selectMany(function (row) {
-									return Object.keys(row);
-								})
-								.distinct()
-								.toArray();
-						};
-
-						rows = function () {
-							var columnNames = self.getColumnNames();
-							return new SelectIterator(
-								new ArrayIterator(config.rows),
-								function (row) {
-									return E.from(columnNames)
-										.select(function (columnName) {
-											return row[columnName];
-										})
-										.toArray();
-								}
-							);
-						};
-					}
-					else {
-						if (config.debug) {
-							config.rows.forEach(function (row) {
-								assert.isArray(row, "Expect 'rows' member of 'config' parameter to DataFrame constructor to be array of objects or arrays, do not mix and match arrays and objects in 'rows'.");
-							});				
-						}
-
-						// Default column names.
-						columnNames = E.range(0, config.rows[0].length)
-							.select(function (columnIndex) {
-								return columnIndex.toString();
+						return E.from(resolvedColumnNames)
+							.select(function (columnName, columnIndex) {
+								return [columnName, columnIndex];
 							})
-							.toArray();
-
-						rows = function () {
-							return new ArrayIterator(config.rows);
-						};
+							.toObject(
+								function (column) {
+									return column[0];
+								},
+								function (column) {
+									return row[column[1]];
+								}
+							);							
 					}
+				);
+	 		};		 		
+		}
+	}
+	else if (config.rows) {
+		if (Object.isFunction(config.rows)) {
+
+			var determineColumnNames = function () {
+				var iterator = config.rows();
+				if (!iterator.moveNext()) {
+					return [];
+				}
+
+				return Object.keys(iterator.getCurrent());
+			};				
+
+			columnNames = determineColumnNames;
+
+			rows = config.rows;
+		}
+		else {
+			assert.isArray(config.rows, "Expected 'rows' member of 'config' parameter to DataFrame constructor to be an array of rows.");
+			
+			if (config.rows.length > 0) {
+				if (Object.isObject(config.rows[0])) {
+
+					if (config.debug) {
+						config.rows.forEach(function (row) {
+							assert.isObject(row, "Expect 'rows' member of 'config' parameter to DataFrame constructor to be array of objects or arrays, do not mix and match arrays and objects in 'rows'.");
+						});							
+					}
+
+					// Derive column names from object fields.
+					columnNames = function () {
+						return E.from(config.rows)
+							.selectMany(function (row) {
+								return Object.keys(row);
+							})
+							.distinct()
+							.toArray();
+					};
+
+					rows = function () {
+						return new ArrayIterator(config.rows);
+					};
+				}
+				else {
+					if (config.debug) {
+						config.rows.forEach(function (row) {
+							assert.isArray(row, "Expect 'rows' member of 'config' parameter to DataFrame constructor to be array of objects or arrays, do not mix and match arrays and objects in 'rows'.");
+						});				
+					}
+
+					// Default column names.
+					columnNames = E.range(0, config.rows[0].length)
+						.select(function (columnIndex) {
+							return columnIndex.toString();
+						})
+						.toArray();
+
+					rows = function () {
+						return new SelectIterator(
+							new ArrayIterator(config.rows),
+							function (row) {
+								return E.range(0, config.rows[0].length)
+									.toObject(
+										function (columnIndex) {
+											return columnIndex.toString();
+										},
+										function (columnIndex) {
+											return row[columnIndex];
+										}
+									);							
+							}
+						);
+					};
 				}
 			}
 		}
 	}
-
-	if (!columnNames) {
-		columnNames = [];
-	}
-
+	
 	if (!rows) {
 		rows = function () {
 			return new ArrayIterator([]);
 		};
 	}
 
+	assert.isFunction(index);
 	assert.isFunction(rows);
 
 	self._columnNames = columnNames || [];
-	self._iterable = rows;
-	self._index = (config && config.index) || 
-		new Index(function () {
-			var length = 0;
-			var iterator = rows();
-			while (iterator.moveNext()) {
-				++length;
-			}
-			return new ArrayIterator(E.range(0, length).toArray()); //todo: this should be a broad cast index.
-		});
+	self._iterable = function () {
+		return new MultiIterator([index(), rows()]);
+	};
 };
 
 /**
@@ -25054,7 +25163,14 @@ var DataFrame = function (config) {
  */
 DataFrame.prototype.getIndex = function () {
 	var self = this;
-	return self._index;
+	return new Index(function () {		
+		return new SelectIterator(
+			self.getIterator(),
+			function (pair) {
+				return pair[0]; // Extract index.
+			}
+		);
+	});
 };
 
 /**
@@ -25074,57 +25190,9 @@ DataFrame.prototype.getColumnNames = function () {
 /**
  * Get an iterator for the data-frame.
  */
-DataFrame.prototype.getIterator = function () { //fio:
+DataFrame.prototype.getIterator = function () {
 	var self = this;
 	return self._iterable();
-};
-
-/**
- * Get a rows iterator for the data-frame.
- */
-DataFrame.prototype.getRowsIterator = function () {
-	var self = this;
-	if (self._newIterable) {
-		return self._newIterable.getRowsIterator();
-	}
-
-	return self.getIterator();
-};
-
-/**
- * Get an objects iterator for the data-frame.
- */
-DataFrame.prototype.getObjectsIterator = function () {
-	var self = this;
-	if (self._newIterable) {
-		return self._newIterable.getObjectsIterator();
-	}
-
-	return new SelectIterator( //fio:
-		self._iterable(),
-		function (row) {
-			return mapRowByColumns(self, row);
-		}
-	);
-};
-
-//
-// Map a row of data to a JS object with column names as fields.
-//
-var mapRowByColumns = function (self, row) {
-
-	return E.from(self.getColumnNames())
-		.zip(row, function (columnName, columnValue) {
-			return [columnName, columnValue];
-		})
-		.toObject(
-			function (column) {
-				return column[0];
-			},
-			function (column) {
-				return column[1];
-			}
-		);
 };
 
 /**
@@ -25150,6 +25218,26 @@ DataFrame.prototype.getColumnIndex = function (columnName) {
 };
 
 /**
+ * Gets a column name from a column index.
+ *
+ * @param {int} columnIndex - The index of the column to retrieve the column name for.
+ *
+ * @returns {string} Returns the name of the column or undefined if the requested column was not found.
+ */
+DataFrame.prototype.getColumnName = function (columnIndex) { //todo: test
+	assert.isNumber(columnIndex, "Expected 'columnIndex' parameter to getColumnIndex to be a non-empty string.");
+
+	var self = this;	
+	var columnNames = self.getColumnNames();
+
+	if (columnIndex < 0 || columnIndex >= columnNames.length) {
+		return undefined;
+	}
+
+	return columnNames[columnIndex];
+};
+
+/**
  * Skip a number of rows in the data frame.
  *
  * @param {int} numRows - Number of rows to skip.
@@ -25159,11 +25247,12 @@ DataFrame.prototype.skip = function (numRows) {
 
 	var self = this;
 	return new DataFrame({
-		columnNames: self.getColumnNames(),
-		rows: function () {
+		columnNames: function () {
+			return self.getColumnNames();
+		},
+		iterable: function () {
 			return new SkipIterator(self.getIterator(), numRows);
 		},
-		index: self.getIndex().skip(numRows),
 	}); 	
 };
 
@@ -25177,26 +25266,14 @@ DataFrame.prototype.skipWhile = function (predicate) {
 
 	var self = this;
 	return new DataFrame({
-		columnNames: self.getColumnNames(),
-		rows: function () {
-			return new SkipWhileIterator(self.getIterator(), function (row) {
-					return predicate(mapRowByColumns(self, row));
+		columnNames: function () {
+			return self.getColumnNames();
+		},
+		iterable: function () {
+			return new SkipWhileIterator(self.getIterator(), function (pair) {
+					return predicate(pair[1], pair[0]);
 				});
 		},
-		index: new Index(function () {
-			var multiIterator = new MultiIterator([self.getIndex().getIterator(), self.getIterator()]);
-			return new SelectIterator(
-					new SkipWhileIterator(
-						multiIterator, 
-						function (pair) {
-							return predicate(mapRowByColumns(self, pair[1]));
-						}
-					),
-					function (pair) {
-						return pair[0];
-					}
-				);
-		}),
 	}); 	
 };
 
@@ -25209,7 +25286,9 @@ DataFrame.prototype.skipUntil = function (predicate) {
 	assert.isFunction(predicate, "Expected 'predicate' parameter to 'skipUntil' function to be a predicate function that returns true/false.");
 
 	var self = this;
-	return self.skipWhile(function (value) { return !predicate(value); });
+	return self.skipWhile(function (value, index) { 
+		return !predicate(value, index); 
+	});
 };
 
 /**
@@ -25222,11 +25301,12 @@ DataFrame.prototype.take = function (numRows) {
 
 	var self = this;
 	return new DataFrame({
-		columnNames: self.getColumnNames(), //todo: this will bake column names! maybe this should always be a function.
-		rows: function () {
+		columnNames: function () {
+			return self.getColumnNames();
+		},
+		iterable: function () {
 			return new TakeIterator(self.getIterator(), numRows);
 		},
-		index: self.getIndex().take(numRows),
 	}); 	
 };
 
@@ -25240,26 +25320,14 @@ DataFrame.prototype.takeWhile = function (predicate) {
 
 	var self = this;
 	return new DataFrame({
-		columnNames: self.getColumnNames(),
-		rows: function () {
-			return new TakeWhileIterator(self.getIterator(), function (row) {
-					return predicate(mapRowByColumns(self, row));
+		columnNames: function () {
+			return self.getColumnNames();
+		},
+		iterable: function () {
+			return new TakeWhileIterator(self.getIterator(), function (pair) {
+					return predicate(pair[1], pair[0]);
 				});
 		},
-		index: new Index(function () {
-			var multiIterator = new MultiIterator([self.getIndex().getIterator(), self.getIterator()]);
-			return new SelectIterator(
-					new TakeWhileIterator(
-						multiIterator, 
-						function (pair) {
-							return predicate(mapRowByColumns(self, pair[1]));
-						}
-					),
-					function (pair) {
-						return pair[0];
-					}
-				);
-		}),
 	}); 	
 };
 
@@ -25272,7 +25340,9 @@ DataFrame.prototype.takeUntil = function (predicate) {
 	assert.isFunction(predicate, "Expected 'predicate' parameter to 'takeUntil' function to be a predicate function that returns true/false.");
 
 	var self = this;
-	return self.takeWhile(function (value) { return !predicate(value); });
+	return self.takeWhile(function (value, index) { 
+		return !predicate(value, index); 
+	});
 };
 
 /**
@@ -25284,77 +25354,15 @@ DataFrame.prototype.where = function (filterSelectorPredicate) {
 	assert.isFunction(filterSelectorPredicate, "Expected 'filterSelectorPredicate' parameter to 'where' function to be a function.");
 
 	var self = this;
-
-	var cachedFilteredIndexAndValues = null;
-
-	//
-	// Lazy execute the filtering.
-	//
-	var executeLazyWhere = function () {
-
-		if (cachedFilteredIndexAndValues) {
-			return cachedFilteredIndexAndValues;
-		}
-
-		cachedFilteredIndexAndValues = E
-			.from(self.getIndex().toValues())
-			.zip(self.toValues(), function (index, values) {
-				return [index, values];
-			})
-			.where(function (data) {
-				var row = data[1];
-				return filterSelectorPredicate(mapRowByColumns(self, row));
-			})
-			.toArray();
-		return cachedFilteredIndexAndValues;
-	}
-
 	return new DataFrame({
-		columnNames: self.getColumnNames(),
-		rows: function () {
-			var iterator = self.getIterator();
-
-			return {
-				moveNext: function () {
-					for (;;) {
-						if (!iterator.moveNext()) {
-							return false;
-						}
-
-						var row = iterator.getCurrent();
-						if (filterSelectorPredicate(mapRowByColumns(self, row))) {
-							return true;
-						}
-					}
-				},
-
-				getCurrent: function () {
-					return iterator.getCurrent();
-				},
-			};
+		columnNames: function () {
+			return self.getColumnNames();
 		},
-		index: new Index(function () {
-			var multiIterator = new MultiIterator([self.getIndex().getIterator(), self.getIterator()]);
-
-			return {
-				moveNext: function () {
-					for (;;) {
-						if (!multiIterator.moveNext()) {
-							return false;
-						}
-
-						var row = multiIterator.getCurrent()[1];
-						if (filterSelectorPredicate(mapRowByColumns(self, row))) {
-							return true;
-						}
-					}
-				},
-
-				getCurrent: function () {
-					return multiIterator.getCurrent()[0];
-				},
-			};
-		}),
+		iterable: function () {
+			return new WhereIterator(self.getIterator(), function (pair) {
+					return filterSelectorPredicate(pair[1], pair[0]);
+				});
+		},
 	}); 	
 };
 
@@ -25367,31 +25375,15 @@ DataFrame.prototype.select = function (selector) {
 	assert.isFunction(selector, "Expected 'selector' parameter to 'select' function to be a function.");
 
 	var self = this;
-
-	var determineColumnNames = function () {
-		// Peek at the first row to ` the column names.
-		var iterator = self.getIterator();
-		if (!iterator.moveNext()) {
-			return []; // No contents, no columns.
-		}
-		return Object.keys(selector(mapRowByColumns(self, iterator.getCurrent())));
-	};
-
 	return new DataFrame({
-		columnNames: determineColumnNames,
-		rows: function () {
-			var columnNames = determineColumnNames();
-
-			return new SelectIterator(self.getIterator(), function (row) {
-					var newValue = selector(mapRowByColumns(self, row));
-					return E.from(columnNames)
-						.select(function (columnName) {
-							return newValue[columnName];
-						})
-						.toArray();
+		iterable: function () {
+			return new SelectIterator(self.getIterator(), function (pair) {
+					return [
+						pair[0],
+						selector(pair[1], pair[0]),
+					];
 				});
 		},
-		index: self.getIndex(),
 	}); 	
 };
 
@@ -25404,65 +25396,20 @@ DataFrame.prototype.selectMany = function (selector) {
 	assert.isFunction(selector, "Expected 'selector' parameter to 'selectMany' function to be a function.");
 
 	var self = this;
-
-	var newColumnNames = null;
-	var newValues = null;
-	var newRows = null;
-
-	//todo: this needs to peek at the first row, to determine the new column names.
-
-	newValues = E.from(self.getIndex().toValues())
-		.zip(self.toValues(), function (index, row) {
-			return [index, selector(mapRowByColumns(self, row))];
-		})
-		.toArray();
-
-	newColumnNames = E.from(newValues)
-		.selectMany(function (data) {
-			var values = data[1];
-			return E.from(values)
-				.selectMany(function (value) {
-					return Object.keys(value);
-				})
-				.toArray();
-		})
-		.distinct()
-		.toArray();
-
-	newRows = E.from(newValues)
-		.selectMany(function (data) {
-			var values = data[1];
-			return E.from(values)
-				.select(function (value) {
-					return E.from(newColumnNames)
-						.select(function (columnName) {
-							return value[columnName];
-						})
-						.toArray();
-				})
-				.toArray();
-		})
-		.toArray();
-
 	return new DataFrame({
-		columnNames: newColumnNames,
-		rows: function () {
-			return new ArrayIterator(newRows);
+		iterable: function () {
+			return new SelectManyIterator(self.getIterator(), function (pair) {
+				var newRows = selector(pair[1], pair[0]);
+				return E.from(newRows)
+					.select(function (newRow) {
+						return [
+							pair[0], 
+							newRow,
+						];
+					})
+					.toArray();
+			})
 		},
-		index: new Index(function () {
-			var indexValues = E.from(newValues)
-				.selectMany(function (data) {
-					var index = data[0];
-					var values = data[1];
-					return E.range(0, values.length)
-						.select(function (_) {
-							return index;
-						})
-						.toArray();
-				})
-				.toArray();
-			return new ArrayIterator(indexValues);
-		}),
 	}); 	
 };
 
@@ -25474,15 +25421,22 @@ DataFrame.prototype.selectMany = function (selector) {
 DataFrame.prototype.getSeries = function (columnNameOrIndex) {
 	var self = this;
 
-	var columnIndex = parseColumnNameOrIndex(self, columnNameOrIndex, true);
+	var columnName = parseColumnNameOrIndexToName(self, columnNameOrIndex, true);
 
 	return new Series({
-		values: function () {
-			return new SelectIterator(self.getIterator(), function (row) {
-					return row[columnIndex];
-				});
+		iterable: function () {
+			return new WhereIterator(
+				new SelectIterator(self.getIterator(), function (pair) {
+					return [
+						pair[0],
+						pair[1][columnName],
+					];
+				}),
+				function (pair) {
+					return pair[1] !== undefined;
+				}
+			);
 		},
-		index: self.getIndex(),
 	});
 };
 
@@ -25509,7 +25463,7 @@ DataFrame.prototype.hasSeries = function (columnName) {
 DataFrame.prototype.expectSeries = function (columnNameOrIndex) {
 
 	var self = this;
-	parseColumnNameOrIndex(self, columnNameOrIndex, true);
+	parseColumnNameOrIndexToIndex(self, columnNameOrIndex, true);
 	return self;
 };
 
@@ -25543,31 +25497,25 @@ DataFrame.prototype.subset = function (columnNames) {
 	
 	return new DataFrame({
 		columnNames: columnNames,
-		rows: function () {
-			var columnIndices = E.from(columnNames)
-				.select(function (columnName) {
-					return self.getColumnIndex(columnName);
-				})
-				.toArray();
-
-			var iterator = self.getIterator();
-
-			return {
-				moveNext: function () {
-					return iterator.moveNext();
-				},
-
-				getCurrent: function () {
-					var currentValue = iterator.getCurrent();
-					return E.from(columnIndices)
-						.select(function (columnIndex) {
-							return currentValue[columnIndex];					
-						})
-						.toArray();
-				},
-			};
+		iterable: function () {
+			return new SelectIterator(
+				self.getIterator(),
+				function (pair) {
+					return [
+						pair[0],
+						E.from(columnNames)
+							.toObject(
+								function (columnName) {
+									return columnName;
+								},
+								function (columnName) {
+									return pair[1][columnName];
+								}
+							)
+					];					
+				}
+			);
 		},
-		index: self.getIndex(),
 	});	 
 };
 
@@ -25594,17 +25542,12 @@ var executeOrderBy = function (self, batch) {
 	assert.isArray(batch);
 	assert(batch.length > 0);
 
-	var cachedSorted = null;
-
 	//todo: reconsider how this works wih lazy iterators.
 
 	//
 	// Don't invoke the sort until we really know what we need.
 	//
 	var executeLazySort = function () {
-		if (cachedSorted) {
-			return cachedSorted;
-		}
 
 		batch.forEach(function (orderCmd) {
 			assert.isObject(orderCmd);
@@ -25612,43 +25555,26 @@ var executeOrderBy = function (self, batch) {
 			validateSortMethod(orderCmd.sortMethod);
 		});
 
-		var valuesWithIndex = E.from(self.getIndex().toValues())
-			.zip(self.toValues(), function (index, values) {
-				return [index].concat(values);
-			})
-			.toArray();	
+		var pairs = self.getIterator().realize();
 
-		cachedSorted = E.from(batch)
-			.aggregate(E.from(valuesWithIndex), function (unsorted, orderCmd) {
-				return unsorted[orderCmd.sortMethod](function (row) {
-					var columnMappedRow = mapRowByColumns(self, E.from(row).skip(1).toArray()); // Skip the generated index column.
-					return orderCmd.sortSelector(columnMappedRow);
+		return E.from(batch)
+			.aggregate(E.from(pairs), function (unsorted, orderCmd) {
+				return unsorted[orderCmd.sortMethod](function (pair) {
+					assert.isArray(pair);
+					assert(pair.length === 2);
+					return orderCmd.sortSelector(pair[1]);
 				}); 
 			})
 			.toArray();
-
-		return cachedSorted;
 	};
 
 	return new DataFrame({
-		columnNames: self.getColumnNames(),
-		rows: function () {
-			return new ArrayIterator(
-				E.from(executeLazySort())
-					.select(function (row) {
-						return E.from(row).skip(1).toArray(); // Extract the values (minus the index) from the sorted data.					
-					})
-					.toArray()
-			);
+		columnNames: function () {
+			return self.getColumnNames();
 		},
-		index: new Index(function () {
-			return new ArrayIterator(E.from(executeLazySort())
-				.select(function (row) {
-					return row[0]; // Extract the index from the sorted data.
-				})
-				.toArray()
-			);
-		}),
+		iterable: function () {
+			return new ArrayIterator(executeLazySort());
+		},
 	});
 };
 
@@ -25765,47 +25691,39 @@ DataFrame.prototype.orderByDescending = function (columnNameOrIndexOrSelector) {
  * @param {string|array} columnOrColumns - Specifies the column name (a string) or columns (array of column names) to drop.
  */
 DataFrame.prototype.dropColumn = function (columnOrColumns) {
+
+	var self = this;
+
 	if (!Object.isArray(columnOrColumns)) {
 		assert.isString(columnOrColumns, "'dropColumn' expected either a string or an array or strings.");
 
 		columnOrColumns = [columnOrColumns]; // Convert to array for coding convenience.
 	}
 
-	var self = this;
-	var columnIndices = E.from(columnOrColumns)
-		.select(function (columnName, index)  {
-			assert.isString(columnName, "Expected column names specifed in parameter 'columnOrColumns' to be string values. Index " + index + " is a " + typeof(columnName));
-			return self.getColumnIndex(columnName);
-		})
-		.where(function (columnIndex) {
-			return columnIndex >= 0;
-		})
-		.toArray();
-
 	return new DataFrame({
-		columnNames: E.from(self.getColumnNames())
-			.where(function (columnName, columnIndex) {
-				return columnIndices.indexOf(columnIndex) < 0;
-			})
-			.toArray(),
-		rows: function () {
-			var iterator = self.getIterator();
-			return {
-				moveNext: function () {
-					return iterator.moveNext();
-				},
-
-				getCurrent: function () {
-					var currentValue = iterator.getCurrent();
-					return E.from(currentValue)
-						.where(function (column, columnIndex) {
-							return columnIndices.indexOf(columnIndex) < 0;
-						})
-						.toArray();
-				},
-			};
+		columnNames: function () {
+			var columnNames = self.getColumnNames().slice(0); // Clone array.
+			return E.from(columnNames)
+				.where(function (columnName) {
+					return !E.from(columnOrColumns).contains(columnName);
+				})
+				.toArray();
 		},
-		index: self.getIndex(),
+		iterable: function () {
+			return new SelectIterator(
+				self.getIterator(),
+				function (pair) {
+					var row = extend({}, pair[1]);
+					columnOrColumns.forEach(function (columnName) {
+						delete row[columnName];
+					});
+					return [
+						pair[0],
+						row
+					];					
+				}
+			);
+		},
 	});
 };
 
@@ -25821,8 +25739,10 @@ DataFrame.prototype.setSeries = function (columnName, data) { //todo: should all
 	var self = this;
 
 	if (Object.isFunction(data)) {
-		data = E.from(self.toObjects())
-			.select(data)
+		data = E.from(self.toPairs()) //todo: make this lazy
+			.select(function (pair) {
+				return data(pair[1], pair[0]);
+			})
 			.toArray();
 	}
 	else if (!Object.isArray(data)) {
@@ -25928,26 +25848,22 @@ DataFrame.prototype.slice = function (startIndexOrStartPredicate, endIndexOrEndP
 	}
 
 	return new DataFrame({
-		columnNames: self.getColumnNames(),
-		rows: function () {
-			return new SelectIterator(
-				new TakeWhileIterator(
-					new SkipWhileIterator(
-						new MultiIterator([self.getIndex().getIterator(), self.getIterator()]),
-						function (pair) {
-							return startPredicate(pair[0]); // Check index for start condition.
-						}
-					),
+		columnNames: function () {
+			return self.getColumnNames();
+		},
+		iterable: function () {
+			return new TakeWhileIterator(
+				new SkipWhileIterator(
+					self.getIterator(),
 					function (pair) {
-						return endPredicate(pair[0]); // Check index for end condition.
+						return startPredicate(pair[0]); // Check index for start condition.
 					}
 				),
 				function (pair) {
-					return pair[1]; // Value.
+					return endPredicate(pair[0]); // Check index for end condition.
 				}
 			);
 		},		
-		index: self.getIndex().slice(startIndexOrStartPredicate, endIndexOrEndPredicate, predicate),
 	});
 
 };
@@ -25961,13 +25877,25 @@ DataFrame.prototype.setIndex = function (columnNameOrIndex) {
 
 	var self = this;
 	return new DataFrame({
-		columnNames: self.getColumnNames(),
-		rows: function () {
-			return self.getIterator();
+		columnNames: function () {
+			return self.getColumnNames();
 		},
-		index: new Index(function () {
-			return self.getSeries(columnNameOrIndex).getIterator();
-		}),
+		iterable: function () {
+			return new MultiIterator([
+				new SelectIterator(
+					self.getSeries(columnNameOrIndex).getIterator(),
+					function (pair) {
+						return pair[1];
+					}
+				),				
+				new SelectIterator(
+					self.getIterator(),
+					function (pair) {
+						return pair[1];
+					}
+				),
+			]);
+		},
 	});
 };
 
@@ -25978,13 +25906,17 @@ DataFrame.prototype.resetIndex = function () {
 
 	var self = this;
 	return new DataFrame({
-		columnNames: self.getColumnNames(),
-		rows: function () {
-			return self.getIterator();
+		columnNames: function () {
+			return self.getColumnNames();
 		},
-		index: new Index(function () { //todo: broad-cast index
-			return new ArrayIterator(E.range(0, self.toValues().length).toArray());
-		}),
+		iterable: function () {
+			return new SelectIterator(
+				self.getIterator(),
+				function (pair, i) {
+					return [i, pair[1]];
+				}
+			);
+		},
 	});
 };
 
@@ -26041,22 +25973,32 @@ DataFrame.prototype.parseFloats = function (columnNameOrIndex) {
  * Parse a column with string values to a column with date values.
  *
  * @param {string|int} columnNameOrIndex - Specifies the column to parse.
+ * @param {string} [formatString] - Optional formatting string for dates.
  */
-DataFrame.prototype.parseDates = function (columnNameOrIndex) {
+DataFrame.prototype.parseDates = function (columnNameOrIndex, formatString) {
+
+	if (formatString) {
+		assert.isString(formatString, "Expected optional 'formatString' parameter to parseDates to be a string (if specified).");
+	}
 
 	var self = this;
-	return self.setSeries(columnNameOrIndex, self.getSeries(columnNameOrIndex).parseDates());
+	return self.setSeries(columnNameOrIndex, self.getSeries(columnNameOrIndex).parseDates(formatString));
 };
 
 /**
  * Convert a column of values of different types to a column of string values.
  *
- * * @param {string|int} columnNameOrIndex - Specifies the column to convert.
+ * @param {string|int} columnNameOrIndex - Specifies the column to convert.
+ * @param {string} [formatString] - Optional formatting string for dates.
  */
-DataFrame.prototype.toStrings = function (columnNameOrIndex) {
+DataFrame.prototype.toStrings = function (columnNameOrIndex, formatString) {
+
+	if (formatString) {
+		assert.isString(formatString, "Expected optional 'formatString' parameter to parseDates to be a string (if specified).");
+	}
 
 	var self = this;
-	return self.setSeries(columnNameOrIndex, self.getSeries(columnNameOrIndex).toString());
+	return self.setSeries(columnNameOrIndex, self.getSeries(columnNameOrIndex).toStrings(formatString));
 };
 
 /**
@@ -26137,9 +26079,10 @@ DataFrame.prototype.truncateStrings = function (maxLength) {
 		.toArray();
 
 	return new DataFrame({
-			columnNames: self.getColumnNames(),
+			columnNames: function () {
+				return self.getColumnNames();
+			},
 			rows: truncatedValues,
-			index: self.getIndex(),
 		});
 };
 
@@ -26181,7 +26124,6 @@ DataFrame.prototype.remapColumns = function (columnNames) {
 					.toArray()
 			);
 		},
-		index: self.getIndex(),
 	});
 };
 
@@ -26194,21 +26136,38 @@ DataFrame.prototype.renameColumns = function (newColumnNames) {
 
 	var self = this;
 
-	var numExistingColumns = self.getColumnNames().length;
+	var existingColumns = self.getColumnNames();
+	var numExistingColumns = existingColumns.length;
 
 	assert.isArray(newColumnNames, "Expected parameter 'newColumnNames' to renameColumns to be an array with column names.");
 	assert(newColumnNames.length === numExistingColumns, "Expected 'newColumnNames' array to have an element for each existing column. There are " + numExistingColumns + "existing columns.");
 
-	newColumnNames.forEach(function (newColumnName) {
-		assert.isString(newColumnName, "Expected new column name to be a string, intead got " + typeof(newColumnName));
-	});
-
 	return new DataFrame({
 		columnNames: newColumnNames,
-		rows: function () {
-			return self.getIterator();
+		iterable: function () {
+			var columnMap = E.from(existingColumns)
+				.zip(newColumnNames, function (oldName, newName) {
+					return [oldName, newName];
+				})
+				.toArray();
+
+			return new SelectIterator(
+				self.getIterator(),
+				function (pair) {
+					return [
+						pair[0],
+						E.from(columnMap).toObject(
+							function (remap) {
+								return remap[1];
+							},
+							function (remap) {
+								return pair[1][remap[0]];								
+							}
+						)
+					];
+				}
+			);
 		},
-		index: self.getIndex(),
 	});
 };
 
@@ -26221,20 +26180,17 @@ DataFrame.prototype.renameColumns = function (newColumnNames) {
 DataFrame.prototype.renameColumn = function (columnNameOrIndex, newColumnName) {
 
 	var self = this;
-	var columnIndex = parseColumnNameOrIndex(self, columnNameOrIndex, false);
+	var columnIndex = parseColumnNameOrIndexToIndex(self, columnNameOrIndex, false);
+	if (columnIndex === -1) {
+		return self;
+	}
 
 	assert.isString(newColumnName, "Expected 'newColumnName' parameter to 'renameColumn' to be a string.");
 
 	var newColumnNames = self.getColumnNames().slice(0); // Clone array.
 	newColumnNames[columnIndex] = newColumnName;
 
-	return new DataFrame({
-		columnNames: newColumnNames,
-		rows: function () {
-			return self.getIterator();
-		},
-		index: self.getIndex(),
-	});
+	return self.renameColumns(newColumnNames);
 };
 
 /**
@@ -26244,13 +26200,20 @@ DataFrame.prototype.toValues = function () {
 
 	var self = this;
 
-	var iterator = self.getRowsIterator();
+	var iterator = self.getIterator();
 	validateIterator(iterator);
 
 	var values = [];
+	var columnNames = self.getColumnNames();
 
 	while (iterator.moveNext()) {
-		values.push(iterator.getCurrent());
+		var curRow = iterator.getCurrent()[1];
+		var asArray = E.from(columnNames)
+			.select(function (columnName) {
+				return curRow[columnName];
+			})
+			.toArray();
+		values.push(asArray);
 	}
 
 	return values;
@@ -26263,13 +26226,13 @@ DataFrame.prototype.toObjects = function () {
 
 	var self = this;
 
-	var iterator = self.getObjectsIterator();
+	var iterator = self.getIterator();
 	validateIterator(iterator);
 
 	var objects = [];
 
 	while (iterator.moveNext()) {
-		objects.push(iterator.getCurrent());
+		objects.push(iterator.getCurrent()[1]); // Extract values.
 	}
 
 	return objects;
@@ -26317,16 +26280,17 @@ DataFrame.prototype.toCSV = function () {
 DataFrame.prototype.toPairs = function () {
 
 	var self = this;
-	return new SelectIterator(
-			new MultiIterator([self.getIndex().getIterator(), self.getIterator()]),
-			function (pair) {
-				return [
-					pair[0],
-					mapRowByColumns(self, pair[1])
-				];
-			}
-		)
-		.realize();
+
+	var iterator = self.getIterator();
+	validateIterator(iterator);
+
+	var pairs = [];
+
+	while (iterator.moveNext()) {
+		pairs.push(iterator.getCurrent());
+	}
+
+	return pairs;
 };
 
 /**
@@ -26431,33 +26395,28 @@ DataFrame.prototype.window = function (period, selector) {
 	var newIndexAndValues = E.range(0, numWindows)
 		.select(function (windowIndex) {
 			var _window = new DataFrame({
-					columnNames: self.getColumnNames(),
-					rows: function () {
-						return new TakeIterator(new SkipIterator(self.getIterator(), windowIndex*period), period);
-					},
-					index: new Index(function () {
-						return new TakeIterator(new SkipIterator(self.getIndex().getIterator(), windowIndex*period), period);
-					}),
-				});
-			return selector(_window, windowIndex);			
-		})
-		.toArray();
-
-	var newIndex = E.from(newIndexAndValues)
-		.select(function (indexAndValue) {
-			return indexAndValue[0];
-		})
-		.toArray();
-	var newValues = E.from(newIndexAndValues)
-		.select(function (indexAndValue) {
-			return indexAndValue[1];
+				iterable: function () {
+					return new TakeIterator(
+						new SkipIterator(
+							self.getIterator(), 
+							windowIndex*period
+						), 
+						period
+					);
+				},
+			});
+			var selectorOutput = selector(_window, windowIndex);
+			assert.isArray(selectorOutput, "Expected output from 'window' selector to be an array.");
+			assert(selectorOutput.length === 2, "Expected output from 'window' selector to be an array with 2 elements: index and value.");
+			return selectorOutput;
 		})
 		.toArray();
 
 	return new Series({
-			values: newValues,
-			index: new Index(newIndex)
-		});
+		iterable: function () {
+			return new ArrayIterator(newIndexAndValues);
+		},
+	});
 };
 
 /** 
@@ -26484,39 +26443,31 @@ DataFrame.prototype.rollingWindow = function (period, selector) {
 	var values = self.toObjects();
 
 	if (values.length == 0) {
-		return new DataFrame();
+		return new Series();
 	}
 
 	var newIndexAndValues = E.range(0, values.length-period+1)
 		.select(function (windowIndex) {
 			var _window = new DataFrame({
-					columnNames: self.getColumnNames(),
-					rows: function () {
-						return new TakeIterator(new SkipIterator(self.getIterator(), windowIndex), period);
+					iterable: function () {
+						return new TakeIterator(
+							new SkipIterator(
+								self.getIterator(), 
+								windowIndex
+							), 
+							period
+						);
 					},
-					index: new Index(function () {
-						return new TakeIterator(new SkipIterator(self.getIndex().getIterator(), windowIndex), period);
-					}),
 				});
 			return selector(_window, windowIndex);			
 		})
 		.toArray();
 
-	var newIndex = E.from(newIndexAndValues)
-		.select(function (indexAndValue) {
-			return indexAndValue[0];
-		})
-		.toArray();
-	var newValues = E.from(newIndexAndValues)
-		.select(function (indexAndValue) {
-			return indexAndValue[1];
-		})
-		.toArray();
-
 	return new Series({
-			values: newValues,
-			index: new Index(newIndex)
-		});
+		iterable: function () {
+			return new ArrayIterator(newIndexAndValues);
+		},
+	});
 };
 
 /**
@@ -26532,7 +26483,7 @@ DataFrame.prototype.first = function () {
 		throw new Error("No rows in data-frame.");
 	}
 
-	return mapRowByColumns(self, iterator.getCurrent());
+	return iterator.getCurrent()[1];
 };
 
 /**
@@ -26554,7 +26505,7 @@ DataFrame.prototype.last = function () {
 		last = iterator.getCurrent();
 	}
 
-	return mapRowByColumns(self, last);
+	return last[1];
 };
 
 /** 
@@ -26563,11 +26514,18 @@ DataFrame.prototype.last = function () {
 DataFrame.prototype.reverse = function () {
 
 	var self = this;
-
 	return new DataFrame({
-			rows: E.from(self.toObjects()).reverse().toArray(),
-			index: self.getIndex().reverse()
-		});
+		columnNames: function () {
+			return self.getColumnNames();
+		},
+		iterable: function () {
+			return new ArrayIterator(
+				E.from(self.getIterator().realize())
+					.reverse()
+					.toArray()
+			);
+		},
+	});
 };
 
 /** 
@@ -26586,6 +26544,7 @@ DataFrame.prototype.generateColumns = function (selector) {
 	//todo: need to be able to override columns on 1 data frame with columns from another.
 
 	var newColumns = self.select(selector);
+
 	return E.from(newColumns.getColumnNames())
 		.aggregate(self, function (prevDataFrame, newColumnName) {
 			return prevDataFrame.setSeries(newColumnName, newColumns.getSeries(newColumnName));
@@ -26603,13 +26562,20 @@ DataFrame.prototype.deflate = function (selector) {
 
 	var self = this;
 
-	//todo: make this lazy.
-	
-	var newValues = E.from(self.toObjects())
-		.select(selector)
-		.toArray();
-
-	return new Series({ values: newValues, index: self.getIndex() });
+	return new Series({ 
+			iterable: function () {
+				return new SelectIterator(
+					self.getIterator(),
+					function (pair) {
+						var newValue = selector(pair[1], pair[0]);
+						return [
+							pair[0],
+							newValue
+						];
+					}
+				);
+			},
+		});
 };
 
 /** 
@@ -26622,9 +26588,11 @@ DataFrame.prototype.inflateColumn = function (columnNameOrIndex, selector) {
 
 	var self = this;
 	var dataForge = require('../index');
-	return self.zip(self.getSeries(columnNameOrIndex).inflate(selector),
+
+	return self.zip(  //todo: this shoudn't purge the index.
+		self.getSeries(columnNameOrIndex).inflate(selector),
 		function (row1, row2) {
-			return extend({}, row1, row2); //todo: this should zip's default operation.
+			return extend({}, row1, row2); //todo: this be should zip's default operation.
 		}
 	);
 };
@@ -26743,45 +26711,77 @@ DataFrame.prototype.zip = function () {
 /**
  * Bring the name column to the front, making it the first column in the data-frame.
  *
- * @param {string} columnName - The name of the column to bring to the front.
+ * @param {string|array} columnOrColumns - Specifies the column or columns to bring to the front.
  */
-DataFrame.prototype.bringToFront = function (columnName) {
+DataFrame.prototype.bringToFront = function (columnOrColumns) {
 
-	assert.isString(columnName, "Expect 'columnName' parameter to bringToFront function to be a string.");
+	if (Object.isArray(columnOrColumns)) {
+		columnOrColumns.forEach(function (columnName) {
+			assert.isString(columnName, "Expect 'columnOrColumns' parameter to bringToFront function to specify a column or columns via a string or an array of strings.");	
+		});
+	}
+	else {
+		assert.isString(columnOrColumns, "Expect 'columnOrColumns' parameter to bringToFront function to specify a column or columns via a string or an array of strings.");
 
-	var self = this;
-
-	var columnIndex = self.getColumnIndex(columnName);
-	if (columnIndex < 0) {
-		throw new Error("Failed to find column with name '" + columnName + "'.");
+		columnOrColumns = [columnOrColumns]; // Convert to array for coding convenience.
 	}
 
-	var reorderedColumnNames = [columnName].concat(utils.dropElement(self.getColumnNames(), columnIndex));
+	var self = this;
+	var existingColumnNames = self.getColumnNames();
+	var columnsToMove = E.from(columnOrColumns) // Strip out non-existing columns.
+		.where(function (columnName) {
+			return E.from(existingColumnNames).contains(columnName);
+		})
+		.toArray();
+
+	var remainingColumnNames = E.from(existingColumnNames)
+		.where(function (columnName) {
+			return !E.from(columnsToMove).contains(columnName);
+		})
+		.toArray();
+
+	var reorderedColumnNames = columnsToMove.concat(remainingColumnNames);
 	return self.remapColumns(reorderedColumnNames);
 };
 
 /**
  * Bring the name column to the back, making it the last column in the data-frame.
  *
- * @param {string} columnName - The name of the column to bring to the back.
+ * @param {string|array} columnOrColumns - Specifies the column or columns to bring to the back.
  */
-DataFrame.prototype.bringToBack = function (columnName) {
+DataFrame.prototype.bringToBack = function (columnOrColumns) {
 
-	assert.isString(columnName, "Expect 'columnName' parameter to bringToBack function to be a string.");
+	if (Object.isArray(columnOrColumns)) {
+		columnOrColumns.forEach(function (columnName) {
+			assert.isString(columnName, "Expect 'columnOrColumns' parameter to bringToBack function to specify a column or columns via a string or an array of strings.");	
+		});
+	}
+	else {
+		assert.isString(columnOrColumns, "Expect 'columnOrColumns' parameter to bringToBack function to specify a column or columns via a string or an array of strings.");
 
-	var self = this;
-
-	var columnIndex = self.getColumnIndex(columnName);
-	if (columnIndex < 0) {
-		throw new Error("Failed to find column with name '" + columnName + "'.");
+		columnOrColumns = [columnOrColumns]; // Convert to array for coding convenience.
 	}
 
-	var reorderedColumnNames = utils.dropElement(self.getColumnNames(), columnIndex).concat([columnName]);
+	var self = this;
+	var existingColumnNames = self.getColumnNames();
+	var columnsToMove = E.from(columnOrColumns) // Strip out non-existing columns.
+		.where(function (columnName) {
+			return E.from(existingColumnNames).contains(columnName);
+		})
+		.toArray();
+
+	var remainingColumnNames = E.from(existingColumnNames)
+		.where(function (columnName) {
+			return !E.from(columnsToMove).contains(columnName);
+		})
+		.toArray();
+
+	var reorderedColumnNames = remainingColumnNames.concat(columnsToMove);
 	return self.remapColumns(reorderedColumnNames);
 };
 
 module.exports = DataFrame;
-},{"../index":6,"../index.js":6,"../src/iterators/select":54,"../src/iterators/take":58,"../src/iterators/take-while":57,"./index":50,"./iterators/array":51,"./iterators/multi":53,"./iterators/skip":56,"./iterators/skip-while":55,"./iterators/validate":59,"./series":60,"./utils":61,"babyparse":7,"chai":8,"easy-table":44,"extend":45,"linq":46}],50:[function(require,module,exports){
+},{"../index":6,"../index.js":6,"../src/iterators/count":53,"../src/iterators/empty":54,"../src/iterators/select":57,"../src/iterators/select-many":56,"../src/iterators/take":61,"../src/iterators/take-while":60,"../src/iterators/where":63,"./index":50,"./iterators/array":51,"./iterators/multi":55,"./iterators/skip":59,"./iterators/skip-while":58,"./iterators/validate":62,"./series":64,"./utils":65,"babyparse":7,"chai":8,"easy-table":44,"extend":45,"linq":46}],50:[function(require,module,exports){
 'use strict';
 
 var ArrayIterator = require('./iterators/array');
@@ -27020,7 +27020,7 @@ Index.prototype.tail = function (values) {
 };
 
 module.exports = Index;
-},{"../src/iterators/take":58,"../src/iterators/take-while":57,"./index":50,"./iterators/array":51,"./iterators/skip":56,"./iterators/skip-while":55,"./iterators/validate":59,"chai":8,"linq":46}],51:[function(require,module,exports){
+},{"../src/iterators/take":61,"../src/iterators/take-while":60,"./index":50,"./iterators/array":51,"./iterators/skip":59,"./iterators/skip-while":58,"./iterators/validate":62,"chai":8,"linq":46}],51:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27117,10 +27117,59 @@ var MultiIterator = function (iterators) {
 			return undefined;
 		}
 	};
+
 };
 
 module.exports = MultiIterator;
-},{"./validate":59,"chai":8,"linq":46}],53:[function(require,module,exports){
+},{"./validate":62,"chai":8,"linq":46}],53:[function(require,module,exports){
+'use strict';
+
+var CountIterator = function () {
+
+	var self = this;
+
+	var working = -1;
+
+	self.moveNext = function () {
+		++working;
+		return true;
+	};
+
+	self.getCurrent = function () {
+		if (working < 0) {
+			return undefined;
+		}
+		else {
+			return working;
+		}
+	};
+
+};
+
+module.exports = CountIterator;
+},{}],54:[function(require,module,exports){
+'use strict';
+
+/*
+ * Defines an empty iterator.
+ */
+
+var EmptyIterator = function () {
+
+	var self = this;
+
+	self.moveNext = function () {
+		return false;
+	};
+
+	self.getCurrent = function () {
+		return undefined;
+	};
+
+};
+
+module.exports = EmptyIterator;
+},{}],55:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27190,7 +27239,81 @@ var MultiIterator = function (iterators) {
 };
 
 module.exports = MultiIterator;
-},{"./validate":59,"chai":8,"linq":46}],54:[function(require,module,exports){
+},{"./validate":62,"chai":8,"linq":46}],56:[function(require,module,exports){
+'use strict';
+
+var assert = require('chai').assert;
+var E = require('linq');
+
+var validateIterator = require('./validate');
+var ArrayIterator = require('./array');
+var SelectIterator = require('./select');
+
+//
+// An iterator that can step multiple other iterators at once.
+//
+var SelectManyIterator = function (iterator, selector) {
+
+	var self = this;
+
+	validateIterator(iterator);
+	assert.isFunction(selector);
+
+	var expandIterator = new SelectIterator(iterator, selector);
+	var childIterator = null;
+
+	self.moveNext = function () {				
+		if (!childIterator) {
+			if (!expandIterator.moveNext()) {
+				return false;
+			}
+
+			childIterator = expandIterator.getCurrent();
+			if (Object.isArray(childIterator)) {
+				childIterator = new ArrayIterator(childIterator);
+			}
+
+			return childIterator.moveNext();
+		}
+		else {
+			if (childIterator.moveNext()) {
+				return true;
+			}
+
+			if (!expandIterator.moveNext()) {
+				return false;
+			}
+
+			childIterator = expandIterator.getCurrent();
+			if (Object.isArray(childIterator)) {
+				childIterator = new ArrayIterator(childIterator);
+			}
+
+			return childIterator.moveNext();
+		}
+	};
+
+	self.getCurrent = function () {
+		return childIterator.getCurrent();
+	};
+
+	//
+	// Bake the iterator into an array.
+	//
+	self.realize = function () {
+
+		var output = [];
+
+		while (self.moveNext()) {
+			output.push(self.getCurrent());
+		}
+
+		return output;
+	};
+};
+
+module.exports = SelectManyIterator;
+},{"./array":51,"./select":57,"./validate":62,"chai":8,"linq":46}],57:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27208,12 +27331,15 @@ var SelectIterator = function (iterator, selector) {
 	validateIterator(iterator);
 	assert.isFunction(selector);
 
+	var i = -1; //todo: test this.
+
 	self.moveNext = function () {				
+		++i;
 		return iterator.moveNext();
 	};
 
 	self.getCurrent = function () {
-		return selector(iterator.getCurrent());
+		return selector(iterator.getCurrent(), i);
 	};
 
 	//
@@ -27232,7 +27358,7 @@ var SelectIterator = function (iterator, selector) {
 };
 
 module.exports = SelectIterator;
-},{"./validate":59,"chai":8,"linq":46}],55:[function(require,module,exports){
+},{"./validate":62,"chai":8,"linq":46}],58:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27246,35 +27372,36 @@ var SkipWhileIterator = function (iterator, predicate) {
 	validateIterator(iterator);
 	assert.isFunction(predicate);
 
+	var self = this;
 	var skipped = false;
-	return {
-		moveNext: function () {
-			for (;;) {
-				if (!iterator.moveNext()) {
-					return false;
-				}
-
-				if (skipped) {
-					// Already skipped.
-					return true;
-				}
-
-				// Skipping until predict returns false.
-				if (!predicate(iterator.getCurrent())) {
-					skipped = true;
-					return true;
-				}
+	
+	self.moveNext = function () {
+		for (;;) {
+			if (!iterator.moveNext()) {
+				return false;
 			}
-		},
 
-		getCurrent: function () {
-			return iterator.getCurrent();
-		},
+			if (skipped) {
+				// Already skipped.
+				return true;
+			}
+
+			// Skipping until predict returns false.
+			if (!predicate(iterator.getCurrent())) {
+				skipped = true;
+				return true;
+			}
+		}
 	};
+
+	self.getCurrent = function () {
+		return iterator.getCurrent();
+	};
+
 };
 
 module.exports = SkipWhileIterator;
-},{"./validate":59,"chai":8}],56:[function(require,module,exports){
+},{"./validate":62,"chai":8}],59:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27300,10 +27427,11 @@ var SkipIterator = function (iterator, skipAmount) {
 	self.getCurrent = function () {
 		return iterator.getCurrent();
 	};
+
 };
 
 module.exports = SkipIterator;
-},{"./validate":59,"chai":8}],57:[function(require,module,exports){
+},{"./validate":62,"chai":8}],60:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27317,34 +27445,34 @@ var TakeWhileIterator = function (iterator, predicate) {
 	validateIterator(iterator);
 	assert.isFunction(predicate);
 
+	var self = this;
 	var taking = true;
-	return {
-		moveNext: function () {
-			if (!taking) {
-				return false;
-			}
 
-			if (!iterator.moveNext()) {
-				return false;
-			}
+	self.moveNext = function () {
+		if (!taking) {
+			return false;
+		}
 
-			if (!predicate(iterator.getCurrent())) {
-				taking = false;
-				return false;
-			}
+		if (!iterator.moveNext()) {
+			return false;
+		}
 
-			return true;
-		},
+		if (!predicate(iterator.getCurrent())) {
+			taking = false;
+			return false;
+		}
 
-		getCurrent: function () {
-			return iterator.getCurrent();
-		},
+		return true;
+	};
+
+	self.getCurrent = function () {
+		return iterator.getCurrent();
 	};
 
 };
 
 module.exports = TakeWhileIterator;
-},{"./validate":59,"chai":8}],58:[function(require,module,exports){
+},{"./validate":62,"chai":8}],61:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27370,10 +27498,11 @@ var TakeIterator = function (iterator, takeAmount) {
 	self.getCurrent = function () {
 		return iterator.getCurrent();
 	};
+
 };
 
 module.exports = TakeIterator;
-},{"./validate":59,"chai":8}],59:[function(require,module,exports){
+},{"./validate":62,"chai":8}],62:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27386,7 +27515,56 @@ module.exports = function (iterator) {
 	assert.isFunction(iterator.moveNext, "Expected iterator to have function 'moveNext'.");
 	assert.isFunction(iterator.getCurrent, "Expected iterator to have function 'getCurrent'.");
 };
-},{"chai":8}],60:[function(require,module,exports){
+},{"chai":8}],63:[function(require,module,exports){
+'use strict';
+
+var assert = require('chai').assert;
+var validateIterator = require('./validate');
+
+//
+// Iterate that filters elements based on a predicate.
+//
+var WhereIterator = function (iterator, predicate) {
+
+	validateIterator(iterator);
+	assert.isFunction(predicate);
+
+	var self = this;
+	
+	self.moveNext = function () {
+		for (;;) {
+			if (!iterator.moveNext()) {
+				return false;
+			}
+
+			// Skipping until predict returns false.
+			if (predicate(iterator.getCurrent())) {
+				return true;
+			}
+		}
+	};
+
+	self.getCurrent = function () {
+		return iterator.getCurrent();
+	};
+
+	//
+	// Bake the iterator into an array.
+	//
+	self.realize = function () {
+
+		var output = [];
+
+		while (self.moveNext()) {
+			output.push(self.getCurrent());
+		}
+
+		return output;
+	};
+};
+
+module.exports = WhereIterator;
+},{"./validate":62,"chai":8}],64:[function(require,module,exports){
 'use strict';
 
 // 
@@ -27404,7 +27582,11 @@ var SkipWhileIterator = require('./iterators/skip-while');
 var TakeIterator = require('../src/iterators/take');
 var TakeWhileIterator = require('../src/iterators/take-while');
 var SelectIterator = require('../src/iterators/select');
+var SelectManyIterator = require('../src/iterators/select-many');
 var MultiIterator = require('../src/iterators/multi');
+var WhereIterator = require('../src/iterators/where');
+var CountIterator = require('../src/iterators/count');
+var EmptyIterator = require('../src/iterators/empty');
 
 /**
  * Represents a time series.
@@ -27413,48 +27595,68 @@ var Series = function (config) {
 
 	var self = this;
 
-	if (config) {
+	if (!config) {
+		self._iterable = function () {
+			return new EmptyIterator();
+		};
+		return;
+	}
 
-		if (!config.values) {
-			throw new Error("Expected 'values' field to be set on 'config' parameter to Series constructor.");
-		}
+	if (config && config.iterable) {
+		assert.isFunction(config.iterable);
 
-		if (Object.isFunction(config.values)) {
-			self._iterable = config.values;
-		}
-		else {
-			assert.isArray(config.values, "Expected 'values' field of 'config' parameter to Series constructor be an array or an iterable.");
+		self._iterable = config.iterable;
+		return;
+	}
 
-			self._iterable = function () {
-				return new ArrayIterator(config.values);
-			};
-		}		
+	var index;
+	var values;
 
-		if (config.index) {
-			assert.isObject(config.index, "Expected 'index' parameter to Series constructor to be an object.");
+	if (!config.values) {
+		throw new Error("Expected 'values' field to be set on 'config' parameter to Series constructor.");
+	}
 
-			self._index = config.index;
-		}
-		else {
-			// Generate the index.
-			self._index = new Index(function () {
-					var iterator = self._iterable();
-					var length = 0;
-					while (iterator.moveNext()) {
-						++length;
-					}
-					return new ArrayIterator(E.range(0, length).toArray());
-				});
-		}
+	if (Object.isFunction(config.values)) {
+		values = config.values;
 	}
 	else {
-		self._iterable = function () {
-			return new ArrayIterator([]);
+		assert.isArray(config.values, "Expected 'values' field of 'config' parameter to Series constructor be an array or an iterable.");
+
+		var valuesArray = config.values;
+
+		values = function () {
+			return new ArrayIterator(valuesArray);
 		};
-		self._index = new Index([]);
+	}		
+
+	if (config.index) {
+		var inputIndex = config.index;
+		if (Object.isArray(inputIndex)) {
+
+			index = function () {
+				return new ArrayIterator(inputIndex);
+			};
+		}
+		else {
+			assert.isObject(inputIndex, "Expected 'index' parameter to Series constructor to be an object.");
+
+			index = function () {
+				return inputIndex.getIterator();
+			};
+		} 
+	}
+	else {
+		index = function () {
+			return new CountIterator();
+		};
 	}
 
-	assert.isFunction(self._iterable);
+	assert.isFunction(values);
+	assert.isFunction(index);
+
+	self._iterable = function () {
+		return new MultiIterator([index(), values()]);
+	};
 };
 
 /**
@@ -27470,7 +27672,20 @@ Series.prototype.getIterator = function () {
  */
 Series.prototype.getIndex = function () {
 	var self = this;
-	return self._index;
+	return new Index(function () {		
+		var iterator = self.getIterator();
+		var i = -1;
+		return { //todo: can just use a select iterator here.
+			moveNext: function () {
+				++i;
+				return iterator.moveNext();
+			},
+
+			getCurrent: function () {
+				return iterator.getCurrent()[0];
+			},
+		};
+	});
 };
 
 /**
@@ -27483,10 +27698,9 @@ Series.prototype.skip = function (numRows) {
 
 	var self = this;
 	return new Series({
-		values: function () {
+		iterable: function () {
 			return new SkipIterator(self.getIterator(), numRows);
 		},		
-		index: self.getIndex().skip(numRows),
 	}); 	
 };
 
@@ -27500,23 +27714,13 @@ Series.prototype.skipWhile = function (predicate) {
 
 	var self = this;
 	return new Series({
-		values: function () {
-			return new SkipWhileIterator(self.getIterator(), predicate);
+		iterable: function () {
+			return new SkipWhileIterator(self.getIterator(), 
+				function (pair) {
+					return predicate(pair[1]);
+				}
+			);
 		},
-		index: new Index(function () {
-			var multiIterator = new MultiIterator([self.getIndex().getIterator(), self.getIterator()]);
-			return new SelectIterator(
-					new SkipWhileIterator(
-						multiIterator, 
-						function (pair) {
-							return predicate(pair[1]);
-						}
-					),
-					function (pair) {
-						return pair[0];
-					}
-				);
-		}),
 	}); 	
 };
 
@@ -27529,7 +27733,9 @@ Series.prototype.skipUntil = function (predicate) {
 	assert.isFunction(predicate, "Expected 'predicate' parameter to 'skipUntil' function to be a predicate function that returns true/false.");
 
 	var self = this;
-	return self.skipWhile(function (value) { return !predicate(value); });
+	return self.skipWhile(function (value) { 
+		return !predicate(value); 
+	});
 };
 
 /**
@@ -27542,10 +27748,9 @@ Series.prototype.take = function (numRows) {
 
 	var self = this;
 	return new Series({
-		values: function () {
+		iterable: function () {
 			return new TakeIterator(self.getIterator(), numRows);
 		},
-		index: self.getIndex().take(numRows),
 	});
 };
 
@@ -27559,23 +27764,13 @@ Series.prototype.takeWhile = function (predicate) {
 
 	var self = this;
 	return new Series({
-		values: function () {
-			return new TakeWhileIterator(self.getIterator(), predicate);
+		iterable: function () {
+			return new TakeWhileIterator(self.getIterator(), 
+				function (pair) {
+					return predicate(pair[1]);
+				}
+			);
 		},
-		index: new Index(function () {
-			var multiIterator = new MultiIterator([self.getIndex().getIterator(), self.getIterator()]);
-			return new SelectIterator(
-					new TakeWhileIterator(
-						multiIterator, 
-						function (pair) {
-							return predicate(pair[1]);
-						}
-					),
-					function (pair) {
-						return pair[0];
-					}
-				);
-		}),
 	}); 	
 };
 
@@ -27588,7 +27783,9 @@ Series.prototype.takeUntil = function (predicate) {
 	assert.isFunction(predicate, "Expected 'predicate' parameter to 'takeUntil' function to be a predicate function that returns true/false.");
 
 	var self = this;
-	return self.takeWhile(function (value) { return !predicate(value); });
+	return self.takeWhile(function (value) { 
+		return !predicate(value); 
+	});
 };
 
 /**
@@ -27600,48 +27797,14 @@ Series.prototype.where = function (filterSelectorPredicate) {
 	assert.isFunction(filterSelectorPredicate, "Expected 'filterSelectorPredicate' parameter to 'where' function to be a function.");
 
 	var self = this;
-
-	var cachedFilteredIndexAndValues = null;
-
-	//
-	// Lazy  execute the filtering.
-	//
-	var executeLazyWhere = function () { //todo: make this properly lazy.
-
-		if (cachedFilteredIndexAndValues) {
-			return cachedFilteredIndexAndValues;
-		}
-
-		cachedFilteredIndexAndValues = E
-			.from(self.getIndex().toValues())
-			.zip(self.toValues(), function (index, value) {
-				return [index, value];
-			})
-			.where(function (data) {
-				var value = data[1];
-				return filterSelectorPredicate(value);
-			})
-			.toArray();
-		return cachedFilteredIndexAndValues;
-	};
-
 	return new Series({
-		values: function () {
-			return new ArrayIterator(E.from(executeLazyWhere())
-				.select(function (data) {
-					return data[1]; // Value
-				})
-				.toArray()
+		iterable: function () {
+			return new WhereIterator(self.getIterator(), 
+				function (pair) {
+					return filterSelectorPredicate(pair[1]);
+				}
 			);
 		},
-		index: new Index(function () {
-			return new ArrayIterator(E.from(executeLazyWhere())
-				.select(function (data) {
-					return data[0]; // Index
-				})
-				.toArray()
-			);
-		}),
 	}); 	
 };
 
@@ -27655,10 +27818,13 @@ Series.prototype.select = function (selector) {
 
 	var self = this;
 	return new Series({
-		values: function () {
-			return new SelectIterator(self.getIterator(), selector);
+		iterable: function () {
+			return new SelectIterator(self.getIterator(), 
+				function (pair) {
+					return [pair[0], selector(pair[1])];
+				}
+			);
 		},		
-		index: self.getIndex(),
 	}); 	
 };
 
@@ -27672,48 +27838,18 @@ Series.prototype.selectMany = function (selector) {
 
 	var self = this;
 
-	var newIndexAndNewValues = null;
-	var newValues = null;
-
-	var lazyEvaluate = function () {
-
-		if (newIndexAndNewValues) {
-			return;
-		}
-
-		newIndexAndNewValues = E.from(self.getIndex().toValues())
-			.zip(self.toValues(), function (index, value) {
-				return [index, selector(value)];
-			})
-			.toArray();
-
-		newValues = E.from(newIndexAndNewValues)
-			.selectMany(function (data) {
-				return data[1]; // Extract expanded values.
-			})
-			.toArray();
-	};
-
 	return new Series({
-		values: function () {
-			lazyEvaluate();
-			return new ArrayIterator(newValues);
-		},
-		index: new Index(function () {
-			lazyEvaluate();
-			var indexValues = E.from(newIndexAndNewValues)
-				.selectMany(function (data) {
-					var index = data[0];
-					var values = data[1];
-					return E.range(0, values.length)
-						.select(function (_) {
-							return index;
+		iterable: function () {
+			return new SelectManyIterator(self.getIterator(), 
+				function (pair) {
+					return E.from(selector(pair[1]))
+						.select(function (newValue) {
+							return [pair[0], newValue];
 						})
 						.toArray();
-				})
-				.toArray();
-			return new ArrayIterator(indexValues);
-		}),
+				}
+			);
+		},
 	}); 	
 };
 
@@ -27740,15 +27876,10 @@ var executeOrderBy = function (self, batch) {
 	assert.isArray(batch);
 	assert(batch.length > 0);
 
-	var cachedSorted = null;
-
 	//
 	// Don't invoke the sort until we really know what we need.
 	//
 	var executeLazySort = function () {
-		if (cachedSorted) {
-			return cachedSorted;
-		}
 
 		batch.forEach(function (orderCmd) {
 			assert.isObject(orderCmd);
@@ -27756,42 +27887,21 @@ var executeOrderBy = function (self, batch) {
 			validateSortMethod(orderCmd.sortMethod);
 		});
 
-		var valuesWithIndex = E.from(self.getIndex().toValues())
-			.zip(self.toValues(), function (index, value) {
-				return [index, value];
-			})
-			.toArray();	
+		var pairs = self.toPairs();
 
-		cachedSorted = E.from(batch)
-			.aggregate(E.from(valuesWithIndex), function (unsorted, orderCmd) {
-				return unsorted[orderCmd.sortMethod](function (row) {
-					var value = row[1];
-					return orderCmd.sortSelector(value);
+		return E.from(batch)
+			.aggregate(E.from(pairs), function (unsorted, orderCmd) {
+				return unsorted[orderCmd.sortMethod](function (pair) {
+					return orderCmd.sortSelector(pair[1]);
 				}); 
 			})
 			.toArray();
-
-		return cachedSorted;
 	};
 
 	return new Series({
-		values: function () {
-			return new ArrayIterator(
-				E.from(executeLazySort())
-					.select(function (row) {
-						return row[1]; // Extract the value (minus the index) from the sorted data.					
-					})
-					.toArray()
-				);
+		iterable: function () {
+			return new ArrayIterator(executeLazySort());
 		},
-		index: new Index(function () {
-			return new ArrayIterator(E.from(executeLazySort())
-				.select(function (row) {
-					return row[0]; // Extract the index from the sorted data.
-				})
-				.toArray()
-			);
-		}),
 	});
 };
 
@@ -27929,25 +28039,19 @@ Series.prototype.slice = function (startIndexOrStartPredicate, endIndexOrEndPred
 	}
 
 	return new Series({
-		values: function () {
-			return new SelectIterator(
-				new TakeWhileIterator(
-					new SkipWhileIterator(
-						new MultiIterator([self.getIndex().getIterator(), self.getIterator()]),
-						function (pair) {
-							return startPredicate(pair[0]); // Check index for start condition.
-						}
-					),
+		iterable: function () {
+			return new TakeWhileIterator(
+				new SkipWhileIterator(
+					self.getIterator(),
 					function (pair) {
-						return endPredicate(pair[0]); // Check index for end condition.
+						return startPredicate(pair[0]); // Check index for start condition.
 					}
 				),
 				function (pair) {
-					return pair[1]; // Value.
+					return endPredicate(pair[0]); // Check index for end condition.
 				}
 			);
 		},		
-		index: self.getIndex().slice(startIndexOrStartPredicate, endIndexOrEndPredicate, predicate),
 	});
 };
 
@@ -27986,34 +28090,24 @@ Series.prototype.window = function (period, selector) {
 	var newIndexAndValues = E.range(0, numWindows)
 		.select(function (windowIndex) {
 			var _window = new Series({
-					values: function () {
-						return new TakeIterator(new SkipIterator(self.getIterator(), windowIndex*period), period);
+					iterable: function () {
+						return new TakeIterator(
+							new SkipIterator(
+								self.getIterator(), 
+								windowIndex*period
+							), 
+							period
+						);
 					},
-					index: new Index(function () {
-						return new TakeIterator(new SkipIterator(self.getIndex().getIterator(), windowIndex*period), period);
-					}),
 				});			
 			return selector(_window, windowIndex);
 		})
 		.toArray();
 
 	return new Series({
-		values: function () {
-			return new ArrayIterator(E.from(newIndexAndValues)
-				.select(function (indexAndValue) {
-					return indexAndValue[1];
-				})
-				.toArray()
-			);
+		iterable: function () {
+			return new ArrayIterator(newIndexAndValues);
 		},
-		index: new Index(function () {
-			return new ArrayIterator(E.from(newIndexAndValues)
-				.select(function (indexAndValue) {
-					return indexAndValue[0];
-				})
-				.toArray()
-			);
-		}),
 	});	
 };
 
@@ -28047,34 +28141,18 @@ Series.prototype.rollingWindow = function (period, selector) {
 	var newIndexAndValues = E.range(0, values.length-period+1)
 		.select(function (windowIndex) {
 			var _window = new Series({
-					values: function () {
+					iterable: function () {
 						return new TakeIterator(new SkipIterator(self.getIterator(), windowIndex), period);
 					},
-					index: new Index(function () {
-						return new TakeIterator(new SkipIterator(self.getIndex().getIterator(), windowIndex), period);
-					}),
 				});			
 			return selector(_window, windowIndex);
 		})
 		.toArray();
 
 	return new Series({
-		values: function () {
-			return new ArrayIterator(E.from(newIndexAndValues)
-				.select(function (indexAndValue) {
-					return indexAndValue[1];
-				})
-				.toArray()
-			);
+		iterable: function () {
+			return new ArrayIterator(newIndexAndValues);
 		},
-		index: new Index(function () {
-			return new ArrayIterator(E.from(newIndexAndValues)
-				.select(function (indexAndValue) {
-					return indexAndValue[0];
-				})
-				.toArray()
-			);
-		}),
 	});
 };
 
@@ -28089,7 +28167,7 @@ Series.prototype.reindex = function (newIndex) {
 	var self = this;
 
 	return new Series({
-		values: function () {
+		iterable: function () {
 			//
 			// Generate a map to relate an index value to a series value.
 			//
@@ -28120,12 +28198,11 @@ Series.prototype.reindex = function (newIndex) {
 			//
 			return new ArrayIterator(E.from(newIndex.toValues())
 				.select(function (newIndexValue) {
-					return indexMap[newIndexValue];
+					return [newIndexValue, indexMap[newIndexValue]];
 				})
 				.toArray()
 			);
 		},		
-		index: newIndex,
 	});
 };
 
@@ -28218,8 +28295,14 @@ Series.prototype.parseFloats = function () {
 
 /**
  * Parse a series with string values to a series with date values.
+ *
+ * @param {string} [formatString] - Optional formatting string for dates.
  */
-Series.prototype.parseDates = function () {
+Series.prototype.parseDates = function (formatString) {
+
+	if (formatString) {
+		assert.isString(formatString, "Expected optional 'formatString' parameter to parseDates to be a string (if specified).");
+	}
 
 	var self = this;
 	return self.select(function (value, valueIndex) {
@@ -28233,15 +28316,21 @@ Series.prototype.parseDates = function () {
 				return undefined;
 			}
 
-			return moment(value).toDate();
+			return moment(value, formatString).toDate();
 		}
 	});
 };
 
 /**
  * Convert a series of values of different types to a series of string values.
+ *
+ * @param {string} [formatString] - Optional formatting string for dates.
  */
-Series.prototype.toStrings = function () {
+Series.prototype.toStrings = function (formatString) {
+
+	if (formatString) {
+		assert.isString(formatString, "Expected optional 'formatString' parameter to parseDates to be a string (if specified).");
+	}
 
 	var self = this;
 	return self.select(function (value) {
@@ -28250,6 +28339,12 @@ Series.prototype.toStrings = function () {
 		}
 		else if (value === null) {
 			return null;
+		}
+		else if (formatString && Object.isDate(value)) {
+			return moment(value).format(formatString);
+		}
+		else if (formatString && moment.isMoment(value)) {
+			return value.format(formatString);
 		}
 		else {
 			return value.toString();	
@@ -28386,7 +28481,7 @@ Series.prototype.toValues = function () {
 	var values = [];
 
 	while (iterator.moveNext()) {
-		values.push(iterator.getCurrent());
+		values.push(iterator.getCurrent()[1]);
 	}
 
 	return values;
@@ -28411,11 +28506,16 @@ Series.prototype.bake = function () {
 Series.prototype.toPairs = function () {
 
 	var self = this;
-	return E.from(self.getIndex().toValues())
-		.zip(self.toValues(), function (index, value) {
-			return [index, value];
-		})
-		.toArray();
+	var iterator = self.getIterator();
+	validateIterator(iterator);
+
+	var pairs = [];
+
+	while (iterator.moveNext()) {
+		pairs.push(iterator.getCurrent());
+	}
+
+	return pairs;
 };
 
 /**
@@ -28446,7 +28546,7 @@ Series.prototype.first = function () {
 		throw new Error("No rows in series.");
 	}
 
-	return iterator.getCurrent();	
+	return iterator.getCurrent()[1];
 };
 
 /**
@@ -28467,7 +28567,7 @@ Series.prototype.last = function () {
 		last = iterator.getCurrent();
 	}
 
-	return last;
+	return last[1];
 };
 
 /** 
@@ -28503,20 +28603,10 @@ Series.prototype.inflate = function (selector) {
 
 	var DataFrame = require('./dataframe');
 	return new DataFrame({
-			columnNames: ["__gen__"],
-			rows: function () {
-				return new SelectIterator(
-					self.getIterator(),
-					function (value) {
-						return [value];
-					}
-				);
-			},
-			index: self.getIndex(),
-		})
-		.select(function (row) {
-			return selector(row.__gen__);
-		});
+		iterable: function () {
+			return self.select(selector).getIterator();
+		},
+	});
 };
 
 /** 
@@ -28606,12 +28696,14 @@ Series.prototype.aggregate = function (seedOrSelector, selector) {
 
 	if (Object.isFunction(seedOrSelector) && !selector) {
 
-		return E.from(self.skip(1).toValues()).aggregate(self.first(), seedOrSelector);
+		return E.from(self.skip(1).toValues())
+			.aggregate(self.first(), seedOrSelector);
 	}
 	else {
 		assert.isFunction(selector, "Expected 'selector' parameter to aggregate to be a function.");
 
-		return E.from(self.toValues()).aggregate(seedOrSelector, selector);
+		return E.from(self.toValues())
+			.aggregate(seedOrSelector, selector);
 	}
 };
 
@@ -28664,7 +28756,7 @@ Series.prototype.zip = function () {
 };
 
 module.exports = Series;
-},{"../index.js":6,"../src/iterators/multi":53,"../src/iterators/select":54,"../src/iterators/take":58,"../src/iterators/take-while":57,"./dataframe":49,"./index":50,"./iterators/array":51,"./iterators/skip":56,"./iterators/skip-while":55,"./iterators/validate":59,"chai":8,"easy-table":44,"linq":46,"moment":47}],61:[function(require,module,exports){
+},{"../index.js":6,"../src/iterators/count":53,"../src/iterators/empty":54,"../src/iterators/multi":55,"../src/iterators/select":57,"../src/iterators/select-many":56,"../src/iterators/take":61,"../src/iterators/take-while":60,"../src/iterators/where":63,"./dataframe":49,"./index":50,"./iterators/array":51,"./iterators/skip":59,"./iterators/skip-while":58,"./iterators/validate":62,"chai":8,"easy-table":44,"linq":46,"moment":47}],65:[function(require,module,exports){
 'use strict';
 
 var E = require('linq');
