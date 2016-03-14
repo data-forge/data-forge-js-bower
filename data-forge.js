@@ -26376,47 +26376,32 @@ DataFrame.prototype.window = function (period, selector) {
 
 	var self = this;
 
-	//todo: make this properly lazy
-
-	var index = self.getIndex().toValues();
-	var values = self.toValues();
-
-	if (values.length == 0) {
-		return new Series();
-	}
-
-	var numWindows = Math.ceil(values.length/period);
-	if (numWindows == 0) {
-		return new Series();
-	}
-	
-	//todo: make this properly lazy
-
-	var newIndexAndValues = E.range(0, numWindows)
-		.select(function (windowIndex) {
-			var _window = new DataFrame({
-				iterable: function () {
-					return new TakeIterator(
-						new SkipIterator(
-							self.getIterator(), 
-							windowIndex*period
-						), 
-						period
-					);
-				},
-			});
-			var selectorOutput = selector(_window, windowIndex);
-			assert.isArray(selectorOutput, "Expected output from 'window' selector to be an array.");
-			assert(selectorOutput.length === 2, "Expected output from 'window' selector to be an array with 2 elements: index and value.");
-			return selectorOutput;
-		})
-		.toArray();
-
 	return new Series({
 		iterable: function () {
-			return new ArrayIterator(newIndexAndValues);
-		},
-	});
+
+			var curOutput = undefined;
+			var done = false;
+			var windowIndex = 0;
+
+			return {
+				moveNext: function () {
+					var window = self.skip(windowIndex*period).take(period);
+					if (window.count() === 0) {
+						return false; //todo: should use .any() function.
+					}
+
+					curOutput = selector(window, windowIndex);
+					++windowIndex;
+					return true;
+				},
+
+				getCurrent: function () {
+					return curOutput;
+				},
+			};
+
+		}
+	});	
 };
 
 /** 
@@ -26437,36 +26422,31 @@ DataFrame.prototype.rollingWindow = function (period, selector) {
 
 	var self = this;
 
-	//todo: make this properly lazy
-
-	var index = self.getIndex().toValues();
-	var values = self.toObjects();
-
-	if (values.length == 0) {
-		return new Series();
-	}
-
-	var newIndexAndValues = E.range(0, values.length-period+1)
-		.select(function (windowIndex) {
-			var _window = new DataFrame({
-					iterable: function () {
-						return new TakeIterator(
-							new SkipIterator(
-								self.getIterator(), 
-								windowIndex
-							), 
-							period
-						);
-					},
-				});
-			return selector(_window, windowIndex);			
-		})
-		.toArray();
-
 	return new Series({
 		iterable: function () {
-			return new ArrayIterator(newIndexAndValues);
-		},
+
+			var curOutput = undefined;
+			var done = false;
+			var windowIndex = 0;
+
+			return {
+				moveNext: function () {
+					var window = self.skip(windowIndex).take(period);
+					if (window.count() < period) {
+						return false;
+					}
+
+					curOutput = selector(window, windowIndex);
+					++windowIndex;
+					return true;
+				},
+
+				getCurrent: function () {
+					return curOutput;
+				},
+			};
+
+		}
 	});
 };
 
@@ -28073,41 +28053,31 @@ Series.prototype.window = function (period, selector) {
 
 	var self = this;
 
-	//todo: make this properly lazy
-
-	var index = self.getIndex().toValues();
-	var values = self.toValues();
-
-	if (values.length == 0) {
-		return new Series();
-	}
-
-	var numWindows = Math.ceil(values.length/period);
-	if (numWindows == 0) {
-		return new Series();
-	}
-	
-	var newIndexAndValues = E.range(0, numWindows)
-		.select(function (windowIndex) {
-			var _window = new Series({
-					iterable: function () {
-						return new TakeIterator(
-							new SkipIterator(
-								self.getIterator(), 
-								windowIndex*period
-							), 
-							period
-						);
-					},
-				});			
-			return selector(_window, windowIndex);
-		})
-		.toArray();
-
 	return new Series({
 		iterable: function () {
-			return new ArrayIterator(newIndexAndValues);
-		},
+
+			var curOutput = undefined;
+			var done = false;
+			var windowIndex = 0;
+
+			return {
+				moveNext: function () {
+					var window = self.skip(windowIndex*period).take(period);
+					if (window.count() === 0) {
+						return false; //todo: should use .any() function.
+					}
+
+					curOutput = selector(window, windowIndex);
+					++windowIndex;
+					return true;
+				},
+
+				getCurrent: function () {
+					return curOutput;
+				},
+			};
+
+		}
 	});	
 };
 
@@ -28129,30 +28099,31 @@ Series.prototype.rollingWindow = function (period, selector) {
 
 	var self = this;
 
-	//todo: make this properly lazy
-
-	var index = self.getIndex().toValues();
-	var values = self.toValues();
-
-	if (values.length == 0) {
-		return new Series();
-	}
-
-	var newIndexAndValues = E.range(0, values.length-period+1)
-		.select(function (windowIndex) {
-			var _window = new Series({
-					iterable: function () {
-						return new TakeIterator(new SkipIterator(self.getIterator(), windowIndex), period);
-					},
-				});			
-			return selector(_window, windowIndex);
-		})
-		.toArray();
-
 	return new Series({
 		iterable: function () {
-			return new ArrayIterator(newIndexAndValues);
-		},
+
+			var curOutput = undefined;
+			var done = false;
+			var windowIndex = 0;
+
+			return {
+				moveNext: function () {
+					var window = self.skip(windowIndex).take(period);
+					if (window.count() < period) {
+						return false;
+					}
+
+					curOutput = selector(window, windowIndex);
+					++windowIndex;
+					return true;
+				},
+
+				getCurrent: function () {
+					return curOutput;
+				},
+			};
+
+		}
 	});
 };
 
