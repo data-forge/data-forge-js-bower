@@ -26337,7 +26337,7 @@ DataFrame.prototype.transformColumn = function (columnNameOrColumnNames, selecto
 	var self = this; //todo: make this lazy.
 
 	if (Object.isObject(columnNameOrColumnNames)) {
-		var columnNames = Object.keys(columnNameOrColumnNames)
+		var columnNames = Object.keys(columnNameOrColumnNames);
 		return E.from(columnNames)
 			.aggregate(self, function (prevDataFrame, columnName) {
 				var columnSelector = columnNameOrColumnNames[columnName];
@@ -26614,11 +26614,19 @@ DataFrame.prototype.aggregate = function (seedOrSelector, selector) {
 	var self = this;
 
 	if (Object.isFunction(seedOrSelector) && !selector) {
-		return E.from(self.toObjects()).aggregate(seedOrSelector);		
+		return self.skip(1).aggregate(self.first(), seedOrSelector);
 	}
 	else if (selector) {
 		assert.isFunction(selector, "Expected 'selector' parameter to aggregate to be a function.");
-		return E.from(self.toObjects()).aggregate(seedOrSelector, selector);
+
+		var working = seedOrSelector;
+		var it = self.getIterator();
+		while (it.moveNext()) {
+			var curValue = it.getCurrent()[1];
+			working = selector(working, curValue); //todo: should pass index in here as well.
+		}
+
+		return working;		
 	}
 	else {
 		assert.isObject(seedOrSelector, "Expected 'seed' parameter to aggregate to be an object.");
@@ -27653,18 +27661,12 @@ Series.prototype.getIterator = function () {
 Series.prototype.getIndex = function () {
 	var self = this;
 	return new Index(function () {		
-		var iterator = self.getIterator();
-		var i = -1;
-		return { //todo: can just use a select iterator here.
-			moveNext: function () {
-				++i;
-				return iterator.moveNext();
-			},
-
-			getCurrent: function () {
-				return iterator.getCurrent()[0];
-			},
-		};
+		return new SelectIterator(
+			self.getIterator(),
+			function (pair) {
+				return pair[0]; // Extract index.
+			}
+		);
 	});
 };
 
@@ -28612,7 +28614,6 @@ Series.prototype.tail = function (values) {
 Series.prototype.sum = function () {
 
 	var self = this;
-	var self = this;
 	return self.aggregate(
 		function (prev, value) {
 			return prev + value;
@@ -28666,15 +28667,19 @@ Series.prototype.aggregate = function (seedOrSelector, selector) {
 	var self = this;
 
 	if (Object.isFunction(seedOrSelector) && !selector) {
-
-		return E.from(self.skip(1).toValues())
-			.aggregate(self.first(), seedOrSelector);
+		return self.skip(1).aggregate(self.first(), seedOrSelector);
 	}
 	else {
 		assert.isFunction(selector, "Expected 'selector' parameter to aggregate to be a function.");
 
-		return E.from(self.toValues())
-			.aggregate(seedOrSelector, selector);
+		var working = seedOrSelector;
+		var it = self.getIterator();
+		while (it.moveNext()) {
+			var curValue = it.getCurrent()[1];
+			working = selector(working, curValue); //todo: should pass index in here as well.
+		}
+
+		return working;
 	}
 };
 
