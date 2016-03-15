@@ -26299,11 +26299,13 @@ DataFrame.prototype.toPairs = function () {
 DataFrame.prototype.bake = function () {
 
 	var self = this;
+	var pairs = self.toPairs();
 	return new DataFrame({
-			columnNames: self.getColumnNames(),
-			rows: self.toValues(),
-			index: self.getIndex().bake(),
-		});
+		columnNames: self.getColumnNames(),
+		iterable: function () {
+			return new ArrayIterator(pairs);
+		},
+	});
 };
 
 /**
@@ -28466,10 +28468,11 @@ Series.prototype.toValues = function () {
 Series.prototype.bake = function () {
 
 	var self = this;
-
-	return new Series({ 
-		values: self.toValues(), 
-		index: self.getIndex().bake(),
+	var pairs = self.toPairs();
+	return new Series({
+		iterable: function () {
+			return new ArrayIterator(pairs);
+		},
 	});
 };
 
