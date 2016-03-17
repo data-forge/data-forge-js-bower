@@ -2154,7 +2154,7 @@ var dataForge = {
 };
 
 module.exports = dataForge;
-},{"./src/dataframe":49,"./src/index":50,"./src/iterators/array":51,"./src/iterators/concat":52,"./src/iterators/multi":55,"./src/iterators/select":57,"./src/series":64,"./src/utils":65,"babyparse":7,"chai":8,"linq":46,"sugar":48}],7:[function(require,module,exports){
+},{"./src/dataframe":49,"./src/index":50,"./src/iterators/array":51,"./src/iterators/concat":52,"./src/iterators/multi":55,"./src/iterators/select":58,"./src/series":65,"./src/utils":66,"babyparse":7,"chai":8,"linq":46,"sugar":48}],7:[function(require,module,exports){
 /*
 	Baby Parse
 	v0.4.1
@@ -24874,7 +24874,7 @@ Date.addLocale('zh-TW', {
 var Series = require('./series');
 var Index = require('./index');
 var ArrayIterator = require('./iterators/array');
-var MultiIterator = require('./iterators/multi');
+var PairIterator = require('./iterators/pair');
 var SkipIterator = require('./iterators/skip');
 var SkipWhileIterator = require('./iterators/skip-while');
 var BabyParse = require('babyparse');
@@ -24924,6 +24924,38 @@ var parseColumnNameOrIndexToName = function (dataFrame, columnNameOrIndex, failF
 	}
 };
 
+//
+// Creates an iterator that converts rows to JavaScript objects based on passed in column names.
+//
+var convertRowsToObjects = function (columnNames, rowsIterator) {
+
+	if (Object.isFunction(columnNames)) {
+		columnNames = columnNames();
+	}
+
+	assert.isArray(columnNames);
+
+	validateIterator(rowsIterator);
+
+	return new SelectIterator(
+		rowsIterator,
+		function (row) {
+			return E.from(columnNames)
+				.select(function (columnName, columnIndex) {
+					return [columnName, columnIndex];
+				})
+				.toObject(
+					function (column) {
+						return column[0];
+					},
+					function (column) {
+						return row[column[1]];
+					}
+				);							
+		}
+	);
+}
+
 /**
  * Constructor for DataFrame.
  *
@@ -24935,13 +24967,13 @@ var DataFrame = function (config) {
 
 	if (!config) {
 		self._columnNames = [];
-		self._iterable = function () {
+		self.getIterator = function () {
 			return new EmptyIterator();
 		};
 		return;
 	}
 
-	if (config && config.iterable) {
+	if (config.iterable) {
 
 		assert.isFunction(config.iterable, "Expected 'iterable' field of 'config' parameter to DataFrame constructor to be a function that returns an index/value pairs iterator.");
 
@@ -24964,36 +24996,24 @@ var DataFrame = function (config) {
 				return Object.keys(iterator.getCurrent()[1]);
 			};
 		}
-		self._iterable = iterable;
+		self.getIterator = iterable;
 		return;
 	}
 
-	var columnNames;
-	var rows;
-	var index;
+	if (!config.rows) {
+		self._columnNames = config.columnNames || [];
+		self.getIterator = function () {
+			return new EmptyIterator();
+		};
+		return;
+	}
 
 	assert.isObject(config, "Expected 'config' parameter to DataFrame constructor to be an object with options for initialisation.");
 
 	if (config.index) {
-		var inputIndex = config.index;
-
-		if (Object.isArray(inputIndex)) {
-			index = function () {
-				return new ArrayIterator(inputIndex);
-			};		
-		}
-		else {
+		if (!Object.isArray(config.index)) {
 			assert.isObject(config.index, "Expected 'index' member of 'config' parameter to DataFrame constructor to be an object.");			
-
-			index = function () {
-				return inputIndex.getIterator();
-			};
 		}
-	}
-	else {
-		index = function () {
-			return new CountIterator();
-		};
 	}
 
 	if (config.columnNames) {
@@ -25009,30 +25029,7 @@ var DataFrame = function (config) {
 			throw new Error("Expected to find a 'rows' member of 'config' parameter to DataFrame constructor.");
 		}
 
-		columnNames = config.columnNames;
-
-	 	if (Object.isFunction(config.rows)) {
-			rows = function () {
-				return new SelectIterator(
-					config.rows(),
-					function (row) {
-						return E.from(columnNames)
-							.select(function (columnName, columnIndex) {
-								return [columnName, columnIndex];
-							})
-							.toObject(
-								function (column) {
-									return column[0];
-								},
-								function (column) {
-									return row[column[1]];
-								}
-							);							
-					}
-				);
-			};
-		}
-		else {
+	 	if (!Object.isFunction(config.rows)) {
 			assert.isArray(config.rows, "Expected 'rows' member of 'config' parameter to DataFrame constructor to be an array of rows.");
 
 			if (config.debug) {
@@ -25040,36 +25037,68 @@ var DataFrame = function (config) {
 					assert.isArray(row, "Expected 'rows' member of 'config' parameter to DataFrame constructor to be an array of arrays, an array of objects or an iterator.");
 				});
 			}
-
-	 		rows = function () {
-				return new SelectIterator(
-					new ArrayIterator(config.rows),
-					function (row) {
-						var resolvedColumnNames = columnNames;
-						if (Object.isFunction(resolvedColumnNames)) {
-							resolvedColumnNames = resolvedColumnNames();
-						}
-						return E.from(resolvedColumnNames)
-							.select(function (columnName, columnIndex) {
-								return [columnName, columnIndex];
-							})
-							.toObject(
-								function (column) {
-									return column[0];
-								},
-								function (column) {
-									return row[column[1]];
-								}
-							);							
-					}
-				);
-	 		};		 		
 		}
 	}
 	else if (config.rows) {
-		if (Object.isFunction(config.rows)) {
+		if (!Object.isFunction(config.rows)) {
+			assert.isArray(config.rows, "Expected 'rows' member of 'config' parameter to DataFrame constructor to be an array of JavaScript objects.");
+			
+			if (config.rows.length > 0) {
+				assert.isObject(config.rows[0], "Expected 'rows' member of 'config' parameter to DataFrame constructor to be an array of JavaScript objects.")
+			}
+		}
+	}
 
-			var determineColumnNames = function () {
+	var rows = config.rows;
+
+	if (config.columnNames)	{
+		self._columnNames = config.columnNames;
+
+		if (config.index) {
+			var index = config.index;
+			if (Object.isArray(index)) {
+
+				if (Object.isFunction(rows)) {
+					this.getIterator = function () {
+						return new PairIterator(new ArrayIterator(index), convertRowsToObjects(self._columnNames, rows()));
+					};
+				}
+				else {
+					this.getIterator = function () {
+						return new PairIterator(new ArrayIterator(index), convertRowsToObjects(self._columnNames, new ArrayIterator(rows)));
+					};
+				}
+			}
+			else {
+				if (Object.isFunction(rows)) {
+					this.getIterator = function () {
+						return new PairIterator(index.getIterator(), convertRowsToObjects(self._columnNames, rows()));
+					};
+				}
+				else {
+					this.getIterator = function () {
+						return new PairIterator(index.getIterator(), convertRowsToObjects(self._columnNames, new ArrayIterator(rows)));
+					};				
+				}
+			}
+		}
+		else {
+			if (Object.isFunction(rows)) {
+				this.getIterator = function () {
+					return new PairIterator(new CountIterator(), convertRowsToObjects(self._columnNames, rows()));
+				};
+			}
+			else {
+				this.getIterator = function () {
+					return new PairIterator(new CountIterator(), convertRowsToObjects(self._columnNames, new ArrayIterator(rows)));
+				};
+			}
+		}	
+	}
+	else {
+		if (Object.isFunction(rows)) {
+
+			self._columnNames = function () {
 				var iterator = config.rows();
 				if (!iterator.moveNext()) {
 					return [];
@@ -25077,85 +25106,59 @@ var DataFrame = function (config) {
 
 				return Object.keys(iterator.getCurrent());
 			};				
-
-			columnNames = determineColumnNames;
-
-			rows = config.rows;
 		}
 		else {
-			assert.isArray(config.rows, "Expected 'rows' member of 'config' parameter to DataFrame constructor to be an array of rows.");
-			
 			if (config.rows.length > 0) {
-				if (Object.isObject(config.rows[0])) {
 
-					if (config.debug) {
-						config.rows.forEach(function (row) {
-							assert.isObject(row, "Expect 'rows' member of 'config' parameter to DataFrame constructor to be array of objects or arrays, do not mix and match arrays and objects in 'rows'.");
-						});							
-					}
+				// Derive column names from object fields.
+				self._columnNames = Object.keys(config.rows[0]);
+			}
+			else {
+				self._columnNames = [];
+			}
+		}
 
-					// Derive column names from object fields.
-					columnNames = function () {
-						return E.from(config.rows)
-							.selectMany(function (row) {
-								return Object.keys(row);
-							})
-							.distinct()
-							.toArray();
-					};
+		if (config.index) {
+			var index = config.index;
+			if (Object.isArray(index)) {
 
-					rows = function () {
-						return new ArrayIterator(config.rows);
+				if (Object.isFunction(rows)) {
+					this.getIterator = function () {
+						return new PairIterator(new ArrayIterator(index), rows());
 					};
 				}
 				else {
-					if (config.debug) {
-						config.rows.forEach(function (row) {
-							assert.isArray(row, "Expect 'rows' member of 'config' parameter to DataFrame constructor to be array of objects or arrays, do not mix and match arrays and objects in 'rows'.");
-						});				
-					}
-
-					// Default column names.
-					columnNames = E.range(0, config.rows[0].length)
-						.select(function (columnIndex) {
-							return columnIndex.toString();
-						})
-						.toArray();
-
-					rows = function () {
-						return new SelectIterator(
-							new ArrayIterator(config.rows),
-							function (row) {
-								return E.range(0, config.rows[0].length)
-									.toObject(
-										function (columnIndex) {
-											return columnIndex.toString();
-										},
-										function (columnIndex) {
-											return row[columnIndex];
-										}
-									);							
-							}
-						);
+					this.getIterator = function () {
+						return new PairIterator(new ArrayIterator(index), new ArrayIterator(rows));
 					};
 				}
 			}
+			else {
+				if (Object.isFunction(rows)) {
+					this.getIterator = function () {
+						return new PairIterator(index.getIterator(), rows());
+					};
+				}
+				else {
+					this.getIterator = function () {
+						return new PairIterator(index.getIterator(), new ArrayIterator(rows));
+					};				
+				}
+			}
+		}
+		else {
+			if (Object.isFunction(rows)) {
+				this.getIterator = function () {
+					return new PairIterator(new CountIterator(), rows());
+				};
+			}
+			else {
+				this.getIterator = function () {
+					return new PairIterator(new CountIterator(), new ArrayIterator(rows));
+				};
+			}
 		}
 	}
-	
-	if (!rows) {
-		rows = function () {
-			return new ArrayIterator([]);
-		};
-	}
-
-	assert.isFunction(index);
-	assert.isFunction(rows);
-
-	self._columnNames = columnNames || [];
-	self._iterable = function () {
-		return new MultiIterator([index(), rows()]);
-	};
 };
 
 /**
@@ -25178,10 +25181,7 @@ DataFrame.prototype.getIndex = function () {
  */
 DataFrame.prototype.getColumnNames = function () {
 	var self = this;
-	if (self._newIterable) {
-		return self._newIterable.getColumnNames();
-	}
-	if (Object.isFunction(self._columnNames)) { //fio:
+	if (Object.isFunction(self._columnNames)) {
 		self._columnNames = self._columnNames(); // Lazy evaluate column names.
 	}
 	return self._columnNames;
@@ -25191,8 +25191,7 @@ DataFrame.prototype.getColumnNames = function () {
  * Get an iterator for the data-frame.
  */
 DataFrame.prototype.getIterator = function () {
-	var self = this;
-	return self._iterable();
+	return new EmptyIterator(); // This function is defined by the constructor.
 };
 
 /**
@@ -25881,7 +25880,7 @@ DataFrame.prototype.setIndex = function (columnNameOrIndex) {
 			return self.getColumnNames();
 		},
 		iterable: function () {
-			return new MultiIterator([
+			return new PairIterator(
 				new SelectIterator(
 					self.getSeries(columnNameOrIndex).getIterator(),
 					function (pair) {
@@ -25893,8 +25892,8 @@ DataFrame.prototype.setIndex = function (columnNameOrIndex) {
 					function (pair) {
 						return pair[1];
 					}
-				),
-			]);
+				)
+			);
 		},
 	});
 };
@@ -26771,7 +26770,7 @@ DataFrame.prototype.bringToBack = function (columnOrColumns) {
 };
 
 module.exports = DataFrame;
-},{"../index":6,"../index.js":6,"../src/iterators/count":53,"../src/iterators/empty":54,"../src/iterators/select":57,"../src/iterators/select-many":56,"../src/iterators/take":61,"../src/iterators/take-while":60,"../src/iterators/where":63,"./index":50,"./iterators/array":51,"./iterators/multi":55,"./iterators/skip":59,"./iterators/skip-while":58,"./iterators/validate":62,"./series":64,"./utils":65,"babyparse":7,"chai":8,"easy-table":44,"extend":45,"linq":46}],50:[function(require,module,exports){
+},{"../index":6,"../index.js":6,"../src/iterators/count":53,"../src/iterators/empty":54,"../src/iterators/select":58,"../src/iterators/select-many":57,"../src/iterators/take":62,"../src/iterators/take-while":61,"../src/iterators/where":64,"./index":50,"./iterators/array":51,"./iterators/pair":56,"./iterators/skip":60,"./iterators/skip-while":59,"./iterators/validate":63,"./series":65,"./utils":66,"babyparse":7,"chai":8,"easy-table":44,"extend":45,"linq":46}],50:[function(require,module,exports){
 'use strict';
 
 var ArrayIterator = require('./iterators/array');
@@ -27010,7 +27009,7 @@ Index.prototype.tail = function (values) {
 };
 
 module.exports = Index;
-},{"../src/iterators/take":61,"../src/iterators/take-while":60,"./index":50,"./iterators/array":51,"./iterators/skip":59,"./iterators/skip-while":58,"./iterators/validate":62,"chai":8,"linq":46}],51:[function(require,module,exports){
+},{"../src/iterators/take":62,"../src/iterators/take-while":61,"./index":50,"./iterators/array":51,"./iterators/skip":60,"./iterators/skip-while":59,"./iterators/validate":63,"chai":8,"linq":46}],51:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27111,7 +27110,7 @@ var MultiIterator = function (iterators) {
 };
 
 module.exports = MultiIterator;
-},{"./validate":62,"chai":8,"linq":46}],53:[function(require,module,exports){
+},{"./validate":63,"chai":8,"linq":46}],53:[function(require,module,exports){
 'use strict';
 
 var CountIterator = function () {
@@ -27229,7 +27228,72 @@ var MultiIterator = function (iterators) {
 };
 
 module.exports = MultiIterator;
-},{"./validate":62,"chai":8,"linq":46}],56:[function(require,module,exports){
+},{"./validate":63,"chai":8,"linq":46}],56:[function(require,module,exports){
+'use strict';
+
+var assert = require('chai').assert;
+var E = require('linq');
+
+var validateIterator = require('./validate');
+
+
+//
+// An iterator that can step multiple other iterators at once.
+//
+var PairIterator = function (it1, it2) {
+	validateIterator(it1);
+	validateIterator(it2);
+
+	var self = this;
+	var started = false;
+	var ok = true;
+
+	self.moveNext = function () {	
+
+		if (!started) {
+			started = true;
+		}
+
+		if (!ok) {
+			return false;
+		}
+
+		if (it1.moveNext() && it2.moveNext()) {
+			return true;
+		}
+
+		ok = false;
+		return false;
+	};
+
+	self.getCurrent = function () {
+		if (!started || !ok) {
+			return undefined;
+		}
+
+		return [
+			it1.getCurrent(),
+			it2.getCurrent(),
+		];
+	};
+
+	//
+	// Bake the iterator into an array.
+	//
+	self.realize = function () {
+
+		var output = [];
+
+		while (self.moveNext()) {
+			output.push(self.getCurrent());
+		}
+
+		return output;
+	};
+};
+
+module.exports = PairIterator;
+},{"./validate":63,"chai":8,"linq":46}],57:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27303,7 +27367,7 @@ var SelectManyIterator = function (iterator, selector) {
 };
 
 module.exports = SelectManyIterator;
-},{"./array":51,"./select":57,"./validate":62,"chai":8,"linq":46}],57:[function(require,module,exports){
+},{"./array":51,"./select":58,"./validate":63,"chai":8,"linq":46}],58:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27348,7 +27412,7 @@ var SelectIterator = function (iterator, selector) {
 };
 
 module.exports = SelectIterator;
-},{"./validate":62,"chai":8,"linq":46}],58:[function(require,module,exports){
+},{"./validate":63,"chai":8,"linq":46}],59:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27391,7 +27455,7 @@ var SkipWhileIterator = function (iterator, predicate) {
 };
 
 module.exports = SkipWhileIterator;
-},{"./validate":62,"chai":8}],59:[function(require,module,exports){
+},{"./validate":63,"chai":8}],60:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27421,7 +27485,7 @@ var SkipIterator = function (iterator, skipAmount) {
 };
 
 module.exports = SkipIterator;
-},{"./validate":62,"chai":8}],60:[function(require,module,exports){
+},{"./validate":63,"chai":8}],61:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27462,7 +27526,7 @@ var TakeWhileIterator = function (iterator, predicate) {
 };
 
 module.exports = TakeWhileIterator;
-},{"./validate":62,"chai":8}],61:[function(require,module,exports){
+},{"./validate":63,"chai":8}],62:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27492,7 +27556,7 @@ var TakeIterator = function (iterator, takeAmount) {
 };
 
 module.exports = TakeIterator;
-},{"./validate":62,"chai":8}],62:[function(require,module,exports){
+},{"./validate":63,"chai":8}],63:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27505,7 +27569,7 @@ module.exports = function (iterator) {
 	assert.isFunction(iterator.moveNext, "Expected iterator to have function 'moveNext'.");
 	assert.isFunction(iterator.getCurrent, "Expected iterator to have function 'getCurrent'.");
 };
-},{"chai":8}],63:[function(require,module,exports){
+},{"chai":8}],64:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27554,7 +27618,7 @@ var WhereIterator = function (iterator, predicate) {
 };
 
 module.exports = WhereIterator;
-},{"./validate":62,"chai":8}],64:[function(require,module,exports){
+},{"./validate":63,"chai":8}],65:[function(require,module,exports){
 'use strict';
 
 // 
@@ -27573,7 +27637,7 @@ var TakeIterator = require('../src/iterators/take');
 var TakeWhileIterator = require('../src/iterators/take-while');
 var SelectIterator = require('../src/iterators/select');
 var SelectManyIterator = require('../src/iterators/select-many');
-var MultiIterator = require('../src/iterators/multi');
+var PairIterator = require('../src/iterators/pair');
 var WhereIterator = require('../src/iterators/where');
 var CountIterator = require('../src/iterators/count');
 var EmptyIterator = require('../src/iterators/empty');
@@ -27586,7 +27650,7 @@ var Series = function (config) {
 	var self = this;
 
 	if (!config) {
-		self._iterable = function () {
+		self.getIterator = function () {
 			return new EmptyIterator();
 		};
 		return;
@@ -27595,58 +27659,64 @@ var Series = function (config) {
 	if (config && config.iterable) {
 		assert.isFunction(config.iterable);
 
-		self._iterable = config.iterable;
+		self.getIterator = config.iterable;
 		return;
 	}
-
-	var index;
-	var values;
 
 	if (!config.values) {
 		throw new Error("Expected 'values' field to be set on 'config' parameter to Series constructor.");
 	}
 
-	if (Object.isFunction(config.values)) {
-		values = config.values;
+	if (!Object.isFunction(config.values)) {
+		assert.isArray(config.values, "Expected 'values' field of 'config' parameter to Series constructor be an array of values or a function that returns an iterator.");
 	}
-	else {
-		assert.isArray(config.values, "Expected 'values' field of 'config' parameter to Series constructor be an array or an iterable.");
-
-		var valuesArray = config.values;
-
-		values = function () {
-			return new ArrayIterator(valuesArray);
-		};
-	}		
 
 	if (config.index) {
-		var inputIndex = config.index;
-		if (Object.isArray(inputIndex)) {
+		if (!Object.isArray(config.index)) {
+			assert.isObject(config.index, "Expected 'index' field of 'config' parameter to Series constructor to be an array of values or an Index object.");
+		}
+	}
 
-			index = function () {
-				return new ArrayIterator(inputIndex);
+	var values = config.values;
+
+	if (!config.index) {
+		// Index not supplied.
+		// Generate an index.
+		if (Object.isFunction(values)) {
+			self.getIterator = function () {
+				return new PairIterator(new CountIterator(), values());
 			};
 		}
 		else {
-			assert.isObject(inputIndex, "Expected 'index' parameter to Series constructor to be an object.");
-
-			index = function () {
-				return inputIndex.getIterator();
+			self.getIterator = function () {
+				return new PairIterator(new CountIterator(), new ArrayIterator(values));
 			};
-		} 
+		}
+		return;
+	}
+
+	var index = config.index;
+
+	if (Object.isArray(index)) {
+		if (Object.isFunction(values)) {
+			return new PairIterator(new ArrayIterator(index), values());
+		}
+		else {
+			self.getIterator = function () {
+				return new PairIterator(new ArrayIterator(index), new ArrayIterator(values));
+			};			
+		}
 	}
 	else {
-		index = function () {
-			return new CountIterator();
-		};
+		if (Object.isFunction(values)) {
+			return new PairIterator(index.getIterator(), values());
+		}
+		else {
+			self.getIterator = function () {
+				return new PairIterator(index.getIterator(), new ArrayIterator(values));
+			};			
+		}
 	}
-
-	assert.isFunction(values);
-	assert.isFunction(index);
-
-	self._iterable = function () {
-		return new MultiIterator([index(), values()]);
-	};
 };
 
 /**
@@ -27654,7 +27724,7 @@ var Series = function (config) {
  */
 Series.prototype.getIterator = function () {
 	var self = this;
-	return self._iterable();
+	return new EmptyIterator(); // This is redefined by the constructor.
 };
 
 /**
@@ -28735,7 +28805,7 @@ Series.prototype.zip = function () {
 };
 
 module.exports = Series;
-},{"../index.js":6,"../src/iterators/count":53,"../src/iterators/empty":54,"../src/iterators/multi":55,"../src/iterators/select":57,"../src/iterators/select-many":56,"../src/iterators/take":61,"../src/iterators/take-while":60,"../src/iterators/where":63,"./dataframe":49,"./index":50,"./iterators/array":51,"./iterators/skip":59,"./iterators/skip-while":58,"./iterators/validate":62,"chai":8,"easy-table":44,"linq":46,"moment":47}],65:[function(require,module,exports){
+},{"../index.js":6,"../src/iterators/count":53,"../src/iterators/empty":54,"../src/iterators/pair":56,"../src/iterators/select":58,"../src/iterators/select-many":57,"../src/iterators/take":62,"../src/iterators/take-while":61,"../src/iterators/where":64,"./dataframe":49,"./index":50,"./iterators/array":51,"./iterators/skip":60,"./iterators/skip-while":59,"./iterators/validate":63,"chai":8,"easy-table":44,"linq":46,"moment":47}],66:[function(require,module,exports){
 'use strict';
 
 var E = require('linq');
