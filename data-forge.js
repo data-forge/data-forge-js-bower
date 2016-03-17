@@ -27012,13 +27012,10 @@ module.exports = Index;
 },{"../src/iterators/take":62,"../src/iterators/take-while":61,"./index":50,"./iterators/array":51,"./iterators/skip":60,"./iterators/skip-while":59,"./iterators/validate":63,"chai":8,"linq":46}],51:[function(require,module,exports){
 'use strict';
 
-var assert = require('chai').assert;
-
 //
 // Data-forge enumerator for iterating a standard JavaScript array.
 //
 var ArrayIterator = function (arr) {
-	assert.isArray(arr);
 
 	var self = this;
 
@@ -27053,24 +27050,15 @@ var ArrayIterator = function (arr) {
 };
 
 module.exports = ArrayIterator;
-},{"chai":8}],52:[function(require,module,exports){
+},{}],52:[function(require,module,exports){
 'use strict';
 
-var assert = require('chai').assert;
 var E = require('linq');
-
-var validateIterator = require('./validate');
-
 
 //
 // An iterator that can step multiple other iterators at once.
 //
 var MultiIterator = function (iterators) {
-	assert.isArray(iterators);
-
-	iterators.forEach(function (iterator) {
-			validateIterator(iterator);
-		});
 
 	var self = this;
 
@@ -27110,7 +27098,7 @@ var MultiIterator = function (iterators) {
 };
 
 module.exports = MultiIterator;
-},{"./validate":63,"chai":8,"linq":46}],53:[function(require,module,exports){
+},{"linq":46}],53:[function(require,module,exports){
 'use strict';
 
 var CountIterator = function () {
@@ -27161,24 +27149,14 @@ module.exports = EmptyIterator;
 },{}],55:[function(require,module,exports){
 'use strict';
 
-var assert = require('chai').assert;
 var E = require('linq');
-
-var validateIterator = require('./validate');
-
 
 //
 // An iterator that can step multiple other iterators at once.
 //
 var MultiIterator = function (iterators) {
-	assert.isArray(iterators);
-
-	iterators.forEach(function (iterator) {
-			validateIterator(iterator);
-		});
 
 	var self = this;
-
 	var ok = false;
 
 	//
@@ -27228,21 +27206,15 @@ var MultiIterator = function (iterators) {
 };
 
 module.exports = MultiIterator;
-},{"./validate":63,"chai":8,"linq":46}],56:[function(require,module,exports){
+},{"linq":46}],56:[function(require,module,exports){
 'use strict';
 
-var assert = require('chai').assert;
 var E = require('linq');
-
-var validateIterator = require('./validate');
-
 
 //
 // An iterator that can step multiple other iterators at once.
 //
 var PairIterator = function (it1, it2) {
-	validateIterator(it1);
-	validateIterator(it2);
 
 	var self = this;
 	var started = false;
@@ -27293,13 +27265,11 @@ var PairIterator = function (it1, it2) {
 };
 
 module.exports = PairIterator;
-},{"./validate":63,"chai":8,"linq":46}],57:[function(require,module,exports){
+},{"linq":46}],57:[function(require,module,exports){
 'use strict';
 
-var assert = require('chai').assert;
 var E = require('linq');
 
-var validateIterator = require('./validate');
 var ArrayIterator = require('./array');
 var SelectIterator = require('./select');
 
@@ -27309,9 +27279,6 @@ var SelectIterator = require('./select');
 var SelectManyIterator = function (iterator, selector) {
 
 	var self = this;
-
-	validateIterator(iterator);
-	assert.isFunction(selector);
 
 	var expandIterator = new SelectIterator(iterator, selector);
 	var childIterator = null;
@@ -27367,13 +27334,10 @@ var SelectManyIterator = function (iterator, selector) {
 };
 
 module.exports = SelectManyIterator;
-},{"./array":51,"./select":58,"./validate":63,"chai":8,"linq":46}],58:[function(require,module,exports){
+},{"./array":51,"./select":58,"linq":46}],58:[function(require,module,exports){
 'use strict';
 
-var assert = require('chai').assert;
 var E = require('linq');
-
-var validateIterator = require('./validate');
 
 //
 // An iterator that can step multiple other iterators at once.
@@ -27381,10 +27345,6 @@ var validateIterator = require('./validate');
 var SelectIterator = function (iterator, selector) {
 
 	var self = this;
-
-	validateIterator(iterator);
-	assert.isFunction(selector);
-
 	var i = -1; //todo: test this.
 
 	self.moveNext = function () {				
@@ -27412,19 +27372,13 @@ var SelectIterator = function (iterator, selector) {
 };
 
 module.exports = SelectIterator;
-},{"./validate":63,"chai":8,"linq":46}],59:[function(require,module,exports){
+},{"linq":46}],59:[function(require,module,exports){
 'use strict';
-
-var assert = require('chai').assert;
-var validateIterator = require('./validate');
 
 //
 // Iterator that skips elements while the predicate returns true.
 //
 var SkipWhileIterator = function (iterator, predicate) {
-
-	validateIterator(iterator);
-	assert.isFunction(predicate);
 
 	var self = this;
 	var skipped = false;
@@ -27455,19 +27409,13 @@ var SkipWhileIterator = function (iterator, predicate) {
 };
 
 module.exports = SkipWhileIterator;
-},{"./validate":63,"chai":8}],60:[function(require,module,exports){
+},{}],60:[function(require,module,exports){
 'use strict';
-
-var assert = require('chai').assert;
-var validateIterator = require('./validate');
 
 //
 // Data-forge enumerator for iterating a standard JavaScript array.
 //
 var SkipIterator = function (iterator, skipAmount) {
-
-	validateIterator(iterator);
-	assert.isNumber(skipAmount);
 
 	var self = this;
 
@@ -27485,19 +27433,13 @@ var SkipIterator = function (iterator, skipAmount) {
 };
 
 module.exports = SkipIterator;
-},{"./validate":63,"chai":8}],61:[function(require,module,exports){
+},{}],61:[function(require,module,exports){
 'use strict';
-
-var assert = require('chai').assert;
-var validateIterator = require('./validate');
 
 //
 // Iterator that takes elements while the predicate returns true.
 //
 var TakeWhileIterator = function (iterator, predicate) {
-
-	validateIterator(iterator);
-	assert.isFunction(predicate);
 
 	var self = this;
 	var taking = true;
@@ -27526,19 +27468,13 @@ var TakeWhileIterator = function (iterator, predicate) {
 };
 
 module.exports = TakeWhileIterator;
-},{"./validate":63,"chai":8}],62:[function(require,module,exports){
+},{}],62:[function(require,module,exports){
 'use strict';
-
-var assert = require('chai').assert;
-var validateIterator = require('./validate');
 
 //
 // Data-forge enumerator for iterating a standard JavaScript array.
 //
 var TakeIterator = function (iterator, takeAmount) {
-
-	validateIterator(iterator);
-	assert.isNumber(takeAmount);
 
 	var self = this;
 
@@ -27556,7 +27492,7 @@ var TakeIterator = function (iterator, takeAmount) {
 };
 
 module.exports = TakeIterator;
-},{"./validate":63,"chai":8}],63:[function(require,module,exports){
+},{}],63:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27572,16 +27508,10 @@ module.exports = function (iterator) {
 },{"chai":8}],64:[function(require,module,exports){
 'use strict';
 
-var assert = require('chai').assert;
-var validateIterator = require('./validate');
-
 //
 // Iterate that filters elements based on a predicate.
 //
 var WhereIterator = function (iterator, predicate) {
-
-	validateIterator(iterator);
-	assert.isFunction(predicate);
 
 	var self = this;
 	
@@ -27618,7 +27548,7 @@ var WhereIterator = function (iterator, predicate) {
 };
 
 module.exports = WhereIterator;
-},{"./validate":63,"chai":8}],65:[function(require,module,exports){
+},{}],65:[function(require,module,exports){
 'use strict';
 
 // 
@@ -27723,7 +27653,6 @@ var Series = function (config) {
  * Get an iterator for the iterating the values of the series.
  */
 Series.prototype.getIterator = function () {
-	var self = this;
 	return new EmptyIterator(); // This is redefined by the constructor.
 };
 
