@@ -25178,9 +25178,9 @@ DataFrame.prototype.none = function (predicate) {
  * @param {function} valueSelector - Selects the value used to compare for duplicates.
  * @param {function} outputSelector - Selects the index and value for a collapsed group of rows.
  */
-DataFrame.prototype.collapseSequentialDuplicates = function (valueSelector, outputSelector) {
-	assert.isFunction(valueSelector, "Expected 'valueSelector' parameter to 'collapseSequentialDuplicates' to be a function.")
-	assert.isFunction(outputSelector, "Expected 'outputSelector' parameter to 'collapseSequentialDuplicates' to be a function.")
+DataFrame.prototype.sequentialDistinct = function (valueSelector, outputSelector) {
+	assert.isFunction(valueSelector, "Expected 'valueSelector' parameter to 'sequentialDistinct' to be a function.")
+	assert.isFunction(outputSelector, "Expected 'outputSelector' parameter to 'sequentialDistinct' to be a function.")
 
 	var self = this;
 
@@ -25248,6 +25248,94 @@ DataFrame.prototype.collapseSequentialDuplicates = function (valueSelector, outp
 					})
 					.toArray()
 			)
+	});
+};
+
+/**
+ * Collapse distinct rows in the dataframe.
+ * The selector function must return the index and row to use in the new series.
+ *
+ * @param {function} valueSelector - Selects the value used to compare for duplicates.
+ * @param {function} outputSelector - Selects the index and row to represent a collapsed group of rows.
+ */
+DataFrame.prototype.distinct = function (valueSelector, outputSelector) {
+	assert.isFunction(valueSelector, "Expected 'valueSelector' parameter to 'distinct' to be a function.")
+	assert.isFunction(outputSelector, "Expected 'outputSelector' parameter to 'distinct' to be a function.")
+
+	var self = this;
+
+	//todo: make this lazy.
+
+	/* todo: Want to zip here, when zip can specify the index. 
+
+	series.zip(series.skip(1), function (prev, next) { 
+		});
+
+	*/
+
+	var input = E.from(self.toPairs())
+		.select(function (pair) {
+			return {
+				pair: pair,
+				considered: false,
+			};
+		})
+		.toArray();
+
+	var output = [];
+
+	for (var i = 0; i < input.length; ++i) {
+		var underConsideration = input[i];
+		if (underConsideration.considered) {
+			// Skip this item, it has already been dealt with.
+			continue;
+		}
+
+		var curWindow = [];
+
+		underConsideration.considered = true; // Don't really need to do this, because we never backtrack, but it feels like it makes the code 'complete'.
+		curWindow.push(underConsideration.pair);
+
+		var firstValue = valueSelector(underConsideration.pair[1]);
+
+		for (var j = i+1; j < input.length; ++j) {
+			var underComparison = input[j];
+			if (underComparison.considered) {
+				continue;
+			}
+
+			if (valueSelector(underComparison.pair[1]) === firstValue) {
+				underComparison.considered = true;
+				curWindow.push(underComparison.pair);
+			}
+		}
+
+		var window = new DataFrame({
+			rows: E.from(curWindow)	
+				.select(function (pair) {
+					return pair[1];
+				})
+				.toArray(),
+			index: E.from(curWindow)
+				.select(function (pair) {
+					return pair[0];
+				})
+				.toArray()
+		});
+		output.push(outputSelector(window));
+	}
+
+	return new DataFrame({
+		rows: E.from(output)
+			.select(function (pair) {
+				return pair[1];
+			})
+			.toArray(),
+		index: E.from(output)
+			.select(function (pair) {
+				return pair[0];
+			})
+			.toArray(),
 	});
 };
 
@@ -27318,12 +27406,12 @@ Series.prototype.none = function (predicate) {
 
 /**
  * Collapse a group of sequential values and produce a new series where duplicates are eliminated.
- * The selector function must return the index to use in the new series.
+ * The selector function must return the index and value to use in the new series.
  *
- * @param {function} indexSelector - Selects the index for a collapsed group of values.
+ * @param {function} outputSelector - Selects the index and value to represent a collapsed group of values.
  */
-Series.prototype.collapseSequentialDuplicates = function (outputSelector) {
-	assert.isFunction(outputSelector, "Expected 'outputSelector' parameter to 'collapseSequentialDuplicates' to be a function.")
+Series.prototype.sequentialDistinct = function (outputSelector) {
+	assert.isFunction(outputSelector, "Expected 'outputSelector' parameter to 'sequentialDistinct' to be a function.")
 
 	var self = this;
 
@@ -27385,6 +27473,90 @@ Series.prototype.collapseSequentialDuplicates = function (outputSelector) {
 					})
 					.toArray()
 			)
+	});
+};
+
+/**
+ * Collapse distinct values in the series.
+ * The selector function must return the index and value to use in the new series.
+ *
+ * @param {function} outputSelector - Selects the index and value to represent a collapsed group of values.
+ */
+Series.prototype.distinct = function (outputSelector) {
+	assert.isFunction(outputSelector, "Expected 'outputSelector' parameter to 'sequentialDistinct' to be a function.")
+
+	var self = this;
+
+	//todo: make this lazy.
+
+	/* todo: Want to zip here, when zip can specify the index. 
+
+	series.zip(series.skip(1), function (prev, next) { 
+		});
+
+	*/
+
+	var input = E.from(self.toPairs())
+		.select(function (pair) {
+			return {
+				pair: pair,
+				considered: false,
+			};
+		})
+		.toArray();
+
+	var output = [];
+
+	for (var i = 0; i < input.length; ++i) {
+		var underConsideration = input[i];
+		if (underConsideration.considered) {
+			// Skip this item, it has already been dealt with.
+			continue;
+		}
+
+		var curWindow = [];
+
+		underConsideration.considered = true; // Don't really need to do this, because we never backtrack, but it feels like it makes the code 'complete'.
+		curWindow.push(underConsideration.pair);
+
+		for (var j = i+1; j < input.length; ++j) {
+			var underComparison = input[j];
+			if (underComparison.considered) {
+				continue;
+			}
+
+			if (underComparison.pair[1] === underConsideration.pair[1]) {
+				underComparison.considered = true;
+				curWindow.push(underComparison.pair);
+			}
+		}
+
+		var window = new Series({
+			values: E.from(curWindow)	
+				.select(function (pair) {
+					return pair[1];
+				})
+				.toArray(),
+			index: E.from(curWindow)
+				.select(function (pair) {
+					return pair[0];
+				})
+				.toArray()
+		});
+		output.push(outputSelector(window));
+	}
+
+	return new Series({
+		values: E.from(output)
+			.select(function (pair) {
+				return pair[1];
+			})
+			.toArray(),
+		index: E.from(output)
+			.select(function (pair) {
+				return pair[0];
+			})
+			.toArray(),
 	});
 };
 
