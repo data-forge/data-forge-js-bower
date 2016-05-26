@@ -23636,10 +23636,10 @@ DataFrame.prototype.where = function (filterSelectorPredicate) {
 /**
  * Generate a new data frame based on the results of the selector function.
  *
- * @param {function} selector - Selector function that transforms each row to a different data structure.
+ * @param {function} selector - Selector function that transforms each row to generate a transformed data-frame.
  */
 DataFrame.prototype.select = function (selector) {
-	assert.isFunction(selector, "Expected 'selector' parameter to 'select' function to be a function.");
+	assert.isFunction(selector, "Expected 'selector' parameter to 'DataFrame.select' to be a selector functions.");
 
 	var self = this;
 	return new DataFrame({
@@ -23661,7 +23661,29 @@ DataFrame.prototype.select = function (selector) {
 /**
  * Generate a new data frame based on the results of the selector function.
  *
- * @param {function} selector - Selector function that transforms each row to a different data structure.
+ * @param {function} selector - Selector function that transforms each index and row pair to generate a transformed data-frame.
+ */
+DataFrame.prototype.selectPairs = function (selector) {
+	assert.isFunction(selector, "Expected 'selector' parameter to 'DataFrame.selectPairs' to be a selector functions.");
+
+	var self = this;
+	return new DataFrame({
+		iterable: function () {
+			return new SelectIterator(self.getIterator(), function (pair) {
+					var newPair = selector(pair[1], pair[0]);
+					if (!Object.isArray(newPair) || newPair.length !== 2 || !Object.isObject(newPair[1])) {
+						throw new Error("Expected return value from 'DataFrame.selectPairs' selector to be a pair, that is an array with two items: [index, object].");
+					}
+					return newPair;
+				});
+		},
+	}); 	
+};
+
+/**
+ * Generate a new data frame based on the results of the selector function.
+ *
+ * @param {function} selector - Selector function that transforms each row to create a new data-frame.
  */
 DataFrame.prototype.selectMany = function (selector) {
 	assert.isFunction(selector, "Expected 'selector' parameter to 'DataFrame.selectMany' function to be a function.");
@@ -23686,6 +23708,36 @@ DataFrame.prototype.selectMany = function (selector) {
 						pair[0], 
 						newRow,
 					]);
+				}
+
+				return newPairs;
+			})
+		},
+	}); 	
+};
+
+/**
+ * Generate a new data frame based on the results of the selector function.
+ *
+ * @param {function} selector - Selector function that transforms each index/row pair to create a new data-frame.
+ */
+DataFrame.prototype.selectManyPairs = function (selector) {
+	assert.isFunction(selector, "Expected 'selector' parameter to 'DataFrame.selectManyPairs' function to be a function.");
+
+	var self = this;
+	return new DataFrame({
+		iterable: function () {
+			return new SelectManyIterator(self.getIterator(), function (pair) {
+				var newPairs = selector(pair[1], pair[0]);
+				if (!Object.isArray(newPairs)) {
+					throw new Error("Expected return value from 'DataFrame.selectManyPairs' selector to be an array of pairs, each item in the array represents a new pair in the resulting DataFrame.");
+				}
+
+				for (var pairIndex = 0; pairIndex < newPairs.length; ++pairIndex) {
+					var newPair = newPairs[pairIndex];
+					if (!Object.isArray(newPair) || newPair.length !== 2 || !Object.isObject(newPair[1])) {
+						throw new Error("Expected return value from 'DataFrame.selectManyPairs' selector to be am array of pairs, but item at index " + pairIndex + " is not an array with two items: [index, object].");
+					}
 				}
 
 				return newPairs;
@@ -25184,71 +25236,12 @@ DataFrame.prototype.sequentialDistinct = function (valueSelector, outputSelector
 
 	var self = this;
 
-	//todo: make this lazy.
-
-	/* todo: Want to zip here, when zip can specify the index. 
-
-	series.zip(series.skip(1), function (prev, next) { 
-		});
-
-	*/
-
-	var input = self.toPairs();
-
-	var output = [];
-
-	if (input.length > 0) {
-
-		var startIndex = 0;
-		var takeAmount = 1;
-
-		var prevPair = input[0]; // 1st pair.
-		var prevValue = valueSelector(prevPair[1], prevPair[0]);
-		console.log('first value: ' + prevValue);
-
-		for (var i = 1; i < input.length; ++i) {
-
-			var curPair = input[i];
-			var curValue = valueSelector(curPair[1], curPair[0]);
-			console.log('cur value: ' + curValue);
-			
-			if (curValue !== prevValue) {
-
-				// Flush.
-				var outputPair = outputSelector(self.skip(startIndex).take(takeAmount));
-				output.push(outputPair);
-
-				startIndex = i;
-				takeAmount = 1;
-			}
-			else {
-				++takeAmount;
-			}
-
-			prevPair = curPair;
-			prevValue = curValue;
-		}
-
-		if (takeAmount > 0) {
-			var outputPair = outputSelector(self.skip(startIndex).take(takeAmount));
-			output.push(outputPair);			
-		}
-	}
-
-	return new DataFrame({
-			rows: E.from(output)
-				.select(function (pair) {
-					return pair[1];
-				})
-				.toArray(),
-			index: new Index(
-				E.from(output)
-					.select(function (pair) {
-						return pair[0];
-					})
-					.toArray()
-			)
-	});
+	return self.variableWindow(
+		function (a, b) {
+			return valueSelector(a) === valueSelector(b);
+		},
+		outputSelector
+	);
 };
 
 /**
@@ -25336,6 +25329,81 @@ DataFrame.prototype.distinct = function (valueSelector, outputSelector) {
 				return pair[0];
 			})
 			.toArray(),
+	});
+};
+
+/**
+ * Groups sequential values into windows. The windows can then be collapsed.
+ * The output selector function must return the index and value to use in the new series.
+ *
+ * @param {function} comparer - Predicate that compares two rows and returns true if they should be in the same window.
+ * @param {function} outputSelector - Selects the index and row to represent a collapsed group of rows.
+ */
+DataFrame.prototype.variableWindow = function (comparer, outputSelector) {
+	assert.isFunction(comparer, "Expected 'comparer' parameter to 'variableWindow' to be a function.")
+	assert.isFunction(outputSelector, "Expected 'outputSelector' parameter to 'variableWindow' to be a function.")
+
+	var self = this;
+
+	//todo: make this lazy.
+
+	/* todo: Want to zip here, when zip can specify the index. 
+
+	series.zip(series.skip(1), function (prev, next) { 
+		});
+
+	*/
+
+	var input = self.toPairs();
+
+	var output = [];
+
+	if (input.length > 0) {
+
+		var startIndex = 0;
+		var takeAmount = 1;
+
+		var prevPair = input[0]; // 1st pair.
+
+		for (var i = 1; i < input.length; ++i) {
+
+			var curPair = input[i];
+			
+			if (!comparer(prevPair[1], curPair[1])) {
+
+				// Flush.
+				var outputPair = outputSelector(self.skip(startIndex).take(takeAmount));
+				output.push(outputPair);
+
+				startIndex = i;
+				takeAmount = 1;
+			}
+			else {
+				++takeAmount;
+			}
+
+			prevPair = curPair;
+		}
+
+		if (takeAmount > 0) {
+			var outputPair = outputSelector(self.skip(startIndex).take(takeAmount));
+			output.push(outputPair);			
+		}
+	}
+
+	return new DataFrame({
+			rows: E.from(output)
+				.select(function (pair) {
+					return pair[1];
+				})
+				.toArray(),
+			index: new Index(
+				E.from(output)
+					.select(function (pair) {
+						return pair[0];
+					})
+					.toArray()
+			)
 	});
 };
 
@@ -26365,7 +26433,7 @@ Series.prototype.where = function (filterSelectorPredicate) {
 /**
  * Generate a new series based on the results of the selector function.
  *
- * @param {function} selector - Selector function that transforms each value to a different data structure.
+ * @param {function} selector - Selector function that transforms each value to create a new series.
  */
 Series.prototype.select = function (selector) {
 	assert.isFunction(selector, "Expected 'selector' parameter to 'select' function to be a function.");
@@ -26376,6 +26444,30 @@ Series.prototype.select = function (selector) {
 			return new SelectIterator(self.getIterator(), 
 				function (pair) {
 					return [pair[0], selector(pair[1], pair[0])];
+				}
+			);
+		},		
+	}); 	
+};
+
+/**
+ * Generate a new series based on the results of the selector function.
+ *
+ * @param {function} selector - Selector function that transforms each index/value to a create a new series.
+ */
+Series.prototype.selectPairs = function (selector) {
+	assert.isFunction(selector, "Expected 'selector' parameter to 'selectPairs' function to be a function.");
+
+	var self = this;
+	return new Series({
+		iterable: function () {
+			return new SelectIterator(self.getIterator(), 
+				function (pair) {
+					var newPair = selector(pair[1], pair[0]);
+					if (!Object.isArray(newPair) || newPair.length !== 2) {
+						throw new Error("Expected return value from 'Series.selectPairs' selector to be a pair, that is an array with two items: [index, value].");
+					}
+					return newPair;
 				}
 			);
 		},		
@@ -26396,7 +26488,7 @@ Series.prototype.selectMany = function (selector) {
 		iterable: function () {
 			return new SelectManyIterator(self.getIterator(), 
 				function (pair) {
-					var newValues = selector(pair[1]);
+					var newValues = selector(pair[1], pair[0]);
 					if (!Object.isArray(newValues)) {
 						throw new Error("Expected return value from 'Series.selectMany' selector to be an array, each item in the array represents a new value in the resulting series.");
 					}
@@ -26404,6 +26496,39 @@ Series.prototype.selectMany = function (selector) {
 					var newPairs = [];
 					for (var newValueIndex = 0; newValueIndex < newValues.length; ++newValueIndex) {
 						newPairs.push([pair[0], newValues[newValueIndex]]);
+					}
+
+					return newPairs;
+				}
+			);
+		},
+	}); 	
+};
+
+/**
+ * Generate a new series based on the results of the selector function.
+ *
+ * @param {function} selector - Selector function that transforms each value to a different data structure.
+ */
+Series.prototype.selectManyPairs = function (selector) {
+	assert.isFunction(selector, "Expected 'selector' parameter to 'Series.selectManyPairs' function to be a function.");
+
+	var self = this;
+
+	return new Series({
+		iterable: function () {
+			return new SelectManyIterator(self.getIterator(), 
+				function (pair) {
+					var newPairs = selector(pair[1], pair[0]);
+					if (!Object.isArray(newPairs)) {
+						throw new Error("Expected return value from 'Series.selectManyPairs' selector to be an array of pairs, each item in the array represents a new pair in the resulting series.");
+					}
+
+					for (var pairIndex = 0; pairIndex < newPairs.length; ++pairIndex) {
+						var newPair = newPairs[pairIndex];
+						if (!Object.isArray(newPair) || newPair.length !== 2) {
+							throw new Error("Expected return value from 'Series.selectManyPairs' selector to be am array of pairs, but item at index " + pairIndex + " is not an array with two items: [index, value].");
+						}
 					}
 
 					return newPairs;
@@ -27415,65 +27540,12 @@ Series.prototype.sequentialDistinct = function (outputSelector) {
 
 	var self = this;
 
-	//todo: make this lazy.
-
-	/* todo: Want to zip here, when zip can specify the index. 
-
-	series.zip(series.skip(1), function (prev, next) { 
-		});
-
-	*/
-
-	var input = self.toPairs();
-
-	var output = [];
-
-	if (input.length > 0) {
-
-		var startIndex = 0;
-		var takeAmount = 1;
-
-		var prevPair = input[0]; // 1st pair.
-
-		for (var i = 1; i < input.length; ++i) {
-
-			var curPair = input[i];
-			
-			if (curPair[1] !== prevPair[1]) {
-				// Flush.
-				var outputPair = outputSelector(self.skip(startIndex).take(takeAmount));
-				output.push(outputPair);
-
-				startIndex = i;
-				takeAmount = 1;
-			}
-			else {
-				++takeAmount;
-			}
-
-			prevPair = curPair;
-		}
-
-		if (takeAmount > 0) {
-			var outputPair = outputSelector(self.skip(startIndex).take(takeAmount));
-			output.push(outputPair);			
-		}
-	}
-
-	return new Series({
-			values: E.from(output)
-				.select(function (pair) {
-					return pair[1];
-				})
-				.toArray(),
-			index: new Index(
-				E.from(output)
-					.select(function (pair) {
-						return pair[0];
-					})
-					.toArray()
-			)
-	});
+	return self.variableWindow(
+		function (a, b) {
+			return a === b;
+		},
+		outputSelector
+	);
 };
 
 /**
@@ -27560,7 +27632,82 @@ Series.prototype.distinct = function (outputSelector) {
 	});
 };
 
+/**
+ * Groups sequential values into windows. The windows can then be collapsed.
+ * The output selector function must return the index and value to use in the new series.
+ *
+ * @param {function} comparer - Predicate that compares two values and returns true if they should be in the same window.
+ * @param {function} outputSelector - Selects the index and value to represent a collapsed group of values.
+ */
+Series.prototype.variableWindow = function (comparer, outputSelector) {
+	assert.isFunction(comparer, "Expected 'comparer' parameter to 'variableWindow' to be a function.")
+	assert.isFunction(outputSelector, "Expected 'outputSelector' parameter to 'variableWindow' to be a function.")
+
+	var self = this;
+
+	//todo: make this lazy.
+
+	/* todo: Want to zip here, when zip can specify the index. 
+
+	series.zip(series.skip(1), function (prev, next) { 
+		});
+
+	*/
+
+	var input = self.toPairs();
+
+	var output = [];
+
+	if (input.length > 0) {
+
+		var startIndex = 0;
+		var takeAmount = 1;
+
+		var prevPair = input[0]; // 1st pair.
+
+		for (var i = 1; i < input.length; ++i) {
+
+			var curPair = input[i];
+			
+			if (!comparer(curPair[1], prevPair[1])) {
+				// Flush.
+				var outputPair = outputSelector(self.skip(startIndex).take(takeAmount));
+				output.push(outputPair);
+
+				startIndex = i;
+				takeAmount = 1;
+			}
+			else {
+				++takeAmount;
+			}
+
+			prevPair = curPair;
+		}
+
+		if (takeAmount > 0) {
+			var outputPair = outputSelector(self.skip(startIndex).take(takeAmount));
+			output.push(outputPair);			
+		}
+	}
+
+	return new Series({
+			values: E.from(output)
+				.select(function (pair) {
+					return pair[1];
+				})
+				.toArray(),
+			index: new Index(
+				E.from(output)
+					.select(function (pair) {
+						return pair[0];
+					})
+					.toArray()
+			)
+	});
+};
+
 module.exports = Series;
+
 },{"../index.js":2,"../src/iterators/count":49,"../src/iterators/empty":50,"../src/iterators/pair":52,"../src/iterators/select":54,"../src/iterators/select-many":53,"../src/iterators/take":58,"../src/iterators/take-while":57,"../src/iterators/where":60,"./dataframe":45,"./index":46,"./iterators/array":47,"./iterators/skip":56,"./iterators/skip-while":55,"./iterators/validate":59,"chai":4,"easy-table":40,"linq":42,"moment":43}],62:[function(require,module,exports){
 'use strict';
 
