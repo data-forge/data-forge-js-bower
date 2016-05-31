@@ -24691,20 +24691,15 @@ DataFrame.prototype.transformSeries = function (columnSelectors) {
 };
 
 /**
- * Move a window over the data-frame (batch by batch), invoke a selector for each window that builds a new series.
+ * Segment a DataFrame into 'windows'. Returns a new Series. Each value in the new Series contains a 'window' (or segment) of the original DataFrame.
+ * Use select or selectPairs to aggregate.
  *
  * @param {integer} period - The number of rows in the window.
- * @param {function} selector - The selector function invoked per row that builds the output series.
- *
- * The selector has the following parameters: 
- *
- *		window - Data-frame that represents the rolling window.
- *		windowIndex - The 0-based index of the window.
  */
-DataFrame.prototype.window = function (period, selector) {
+DataFrame.prototype.window = function (period, obsoleteSelector) {
 
 	assert.isNumber(period, "Expected 'period' parameter to 'window' to be a number.");
-	assert.isFunction(selector, "Expected 'selector' parameter to 'window' to be a function.");
+	assert(!obsoleteSelector, "Selector parameter is obsolete and no longer required.");
 
 	var self = this;
 
@@ -24712,17 +24707,19 @@ DataFrame.prototype.window = function (period, selector) {
 		iterable: function () {
 
 			var curOutput = undefined;
-			var done = false;
 			var windowIndex = 0;
 
 			return {
 				moveNext: function () {
 					var window = self.skip(windowIndex*period).take(period);
-					if (window.count() === 0) {
-						return false; //todo: should use .any() function.
+					if (window.none(function () { return true; })) { //todo: Shouldn't have to pass a predicate.
+						return false; // Nothing left.
 					}
 
-					curOutput = selector(window, windowIndex);
+					curOutput = [
+						windowIndex, 
+						window,						
+					];
 					++windowIndex;
 					return true;
 				},
@@ -24737,20 +24734,15 @@ DataFrame.prototype.window = function (period, selector) {
 };
 
 /** 
- * Move a window over the data-frame (row by row), invoke a selector for each window that builds a new series.
- *
+ * Segment a DataFrame into 'rolling windows'. Returns a new Series. Each value in the new Series contains a 'window' (or segment) of the original DataFrame.
+ * Use select or selectPairs to aggregate.
+
  * @param {integer} period - The number of rows in the window.
- * @param {function} selector - The selector function invoked per row that builds the output series.
- *
- * The selector has the following parameters: 
- *
- *		window - Data-frame that represents the rolling window.
- *		windowIndex - The 0-based index of the window.
  */
-DataFrame.prototype.rollingWindow = function (period, selector) {
+DataFrame.prototype.rollingWindow = function (period, obsoleteSelector) {
 
 	assert.isNumber(period, "Expected 'period' parameter to 'rollingWindow' to be a number.");
-	assert.isFunction(selector, "Expected 'selector' parameter to 'rollingWindow' to be a function.");
+	assert(!obsoleteSelector, "Selector parameter is obsolete and no longer required.");
 
 	var self = this;
 
@@ -24758,17 +24750,19 @@ DataFrame.prototype.rollingWindow = function (period, selector) {
 		iterable: function () {
 
 			var curOutput = undefined;
-			var done = false;
 			var windowIndex = 0;
 
 			return {
 				moveNext: function () {
 					var window = self.skip(windowIndex).take(period);
-					if (window.count() < period) {
+					if (window.count() < period) { //todo: should haven't to count the entire window here.
 						return false;
 					}
-
-					curOutput = selector(window, windowIndex);
+					
+					curOutput = [
+						windowIndex, 
+						window,						
+					];
 					++windowIndex;
 					return true;
 				},
@@ -24783,7 +24777,7 @@ DataFrame.prototype.rollingWindow = function (period, selector) {
 };
 
 /**
- * Get the first row of the data frame.
+ * Get the first row of the DataFrame.
  */
 DataFrame.prototype.first = function () {
 
@@ -24792,14 +24786,14 @@ DataFrame.prototype.first = function () {
 	var iterator = self.getIterator();
 
 	if (!iterator.moveNext()) {
-		throw new Error("No rows in data-frame.");
+		throw new Error("No rows in DataFrame.");
 	}
 
 	return iterator.getCurrent()[1];
 };
 
 /**
- * Get the last row of the data frame.
+ * Get the last row of the DataFrame.
  */
 DataFrame.prototype.last = function () {
 
@@ -24808,7 +24802,7 @@ DataFrame.prototype.last = function () {
 	var iterator = self.getIterator();
 
 	if (!iterator.moveNext()) {
-		throw new Error("No rows in data-frame.");
+		throw new Error("No rows in DataFrame.");
 	}
 
 	while (iterator.moveNext()) {
@@ -24818,8 +24812,44 @@ DataFrame.prototype.last = function () {
 	return iterator.getCurrent()[1]; // Return the last item.
 };
 
+/**
+ * Get the first index/row pair of the DataFrame.
+ */
+DataFrame.prototype.firstPair = function () {
+
+	var self = this;
+
+	var iterator = self.getIterator();
+
+	if (!iterator.moveNext()) {
+		throw new Error("No rows in DataFrame.");
+	}
+
+	return iterator.getCurrent();
+};
+
+/**
+ * Get the last index/row pair of the DataFrame.
+ */
+DataFrame.prototype.lastPair = function () {
+
+	var self = this;
+
+	var iterator = self.getIterator();
+
+	if (!iterator.moveNext()) {
+		throw new Error("No rows in DataFrame.");
+	}
+
+	while (iterator.moveNext()) {
+		; // Don't evaluate current item, it's too expensive.
+	}
+
+	return iterator.getCurrent();
+};
+
 /** 
- * Reverse the data-frame.
+ * Reverse the DataFrame.
  */
 DataFrame.prototype.reverse = function () {
 
@@ -25120,6 +25150,7 @@ DataFrame.prototype.forEach = function (callback) {
 
 /**
  * Group the data-frame into multiple data-frames on the value defined by the selector.
+ * A series is returned that indexed by group key. Each value in the series is a Data-frame containing the group.
  *
  * @param {function} selector - Function that selects the value to group by.
  */
@@ -25129,21 +25160,27 @@ DataFrame.prototype.groupBy = function (selector) {
 	//todo: make this lazy.
 
 	var self = this;
-	return E.from(self.toPairs())
+	var groupedPairs = E.from(self.toPairs())
 		.groupBy(function (pair) {
 			return selector(pair[1], pair[0]);
 		})
 		.select(function (group) {
-			return {
-				key: group.key(),
-				data: new DataFrame({
+			return [
+				group.key(),
+				new DataFrame({
 					iterable: function () {
 						return new ArrayIterator(group.getSource());
 					},
 				}),
-			};
+			];
 		})
 		.toArray();
+
+	return new Series({
+		iterable: function () {
+			return new ArrayIterator(groupedPairs);
+		},
+	});
 };
 
 /**
@@ -25180,14 +25217,20 @@ DataFrame.prototype.all = function (predicate) {
  * Returns true as soon as the predicate returns truthy.
  * Returns false if the predicate never returns truthy.
  *
- * @param {function} predicate - Predicate function that receives each value in turn and returns truthy for a match, otherwise falsy.
+ * @param {function} [predicate] - Optional predicate function that receives each value in turn and returns truthy for a match, otherwise falsy.
  */
 DataFrame.prototype.any = function (predicate) {
-	assert.isFunction(predicate, "Expected 'predicate' parameter to 'all' to be a function.")
+	if (predicate) {
+		assert.isFunction(predicate, "Expected 'predicate' parameter to 'all' to be a function.")
+	}
 
 	var self = this;
 	var iterator = self.getIterator();
 	validateIterator(iterator);
+
+	if (!predicate) {
+		return iterator.moveNext();
+	}
 
 	while (iterator.moveNext()) {
 		var pair = iterator.getCurrent();
@@ -25205,14 +25248,20 @@ DataFrame.prototype.any = function (predicate) {
  * Returns true if the predicate always returns falsy.
  * Otherwise returns false.
  *
- * @param {function} predicate - Predicate function that receives each value in turn and returns truthy for a match, otherwise falsy.
+ * @param {function} [predicate] - Optional predicate function that receives each value in turn and returns truthy for a match, otherwise falsy.
  */
 DataFrame.prototype.none = function (predicate) {
-	assert.isFunction(predicate, "Expected 'predicate' parameter to 'all' to be a function.")
+	if (predicate) {
+		assert.isFunction(predicate, "Expected 'predicate' parameter to 'all' to be a function.")
+	}
 
 	var self = this;
 	var iterator = self.getIterator();
 	validateIterator(iterator);
+
+	if (!predicate) {
+		return !iterator.moveNext();
+	}
 
 	while (iterator.moveNext()) {
 		var pair = iterator.getCurrent();
@@ -25225,35 +25274,31 @@ DataFrame.prototype.none = function (predicate) {
 };
 
 /**
- * Collapse a group of sequential rows and produce a new DataFrame where duplicate rows are eliminated.
+ * Collapse a group of sequential rows with duplicate column values into a Series of windows.
  *
  * @param {function} valueSelector - Selects the value used to compare for duplicates.
- * @param {function} outputSelector - Selects the index and value for a collapsed group of rows.
- */
-DataFrame.prototype.sequentialDistinct = function (valueSelector, outputSelector) {
+ */	
+DataFrame.prototype.sequentialDistinct = function (valueSelector, obsoleteSelector) {
+
 	assert.isFunction(valueSelector, "Expected 'valueSelector' parameter to 'sequentialDistinct' to be a function.")
-	assert.isFunction(outputSelector, "Expected 'outputSelector' parameter to 'sequentialDistinct' to be a function.")
+	assert(!obsoleteSelector, "Selector parameter is obsolete and no longer required.");
 
 	var self = this;
 
-	return self.variableWindow(
-		function (a, b) {
+	return self.variableWindow(function (a, b) {
 			return valueSelector(a) === valueSelector(b);
-		},
-		outputSelector
-	);
+		});
 };
 
 /**
- * Collapse distinct rows in the dataframe.
- * The selector function must return the index and row to use in the new series.
+ * Collapse distinct rows in the dataframe based on the output of 'valueSelector'.
  *
  * @param {function} valueSelector - Selects the value used to compare for duplicates.
- * @param {function} outputSelector - Selects the index and row to represent a collapsed group of rows.
  */
-DataFrame.prototype.distinct = function (valueSelector, outputSelector) {
-	assert.isFunction(valueSelector, "Expected 'valueSelector' parameter to 'distinct' to be a function.")
-	assert.isFunction(outputSelector, "Expected 'outputSelector' parameter to 'distinct' to be a function.")
+DataFrame.prototype.distinct = function (valueSelector, obsoleteSelector) {
+	
+	assert.isFunction(valueSelector, "Expected 'valueSelector' parameter to 'DataFrame.distinct' to be a function.")
+	assert(!obsoleteSelector, "Selector parameter is obsolete and no longer required.");
 
 	var self = this;
 
@@ -25276,6 +25321,7 @@ DataFrame.prototype.distinct = function (valueSelector, outputSelector) {
 		.toArray();
 
 	var output = [];
+	var windowIndex = 0;
 
 	for (var i = 0; i < input.length; ++i) {
 		var underConsideration = input[i];
@@ -25315,7 +25361,9 @@ DataFrame.prototype.distinct = function (valueSelector, outputSelector) {
 				})
 				.toArray()
 		});
-		output.push(outputSelector(window));
+
+		output.push([windowIndex, window]);
+		++windowIndex;
 	}
 
 	return new DataFrame({
@@ -25333,15 +25381,14 @@ DataFrame.prototype.distinct = function (valueSelector, outputSelector) {
 };
 
 /**
- * Groups sequential values into windows. The windows can then be collapsed.
- * The output selector function must return the index and value to use in the new series.
+ * Groups sequential values into variable length 'windows'. The windows can then be transformed/transformed using selectPairs or selectManyPairs.
  *
  * @param {function} comparer - Predicate that compares two rows and returns true if they should be in the same window.
- * @param {function} outputSelector - Selects the index and row to represent a collapsed group of rows.
  */
-DataFrame.prototype.variableWindow = function (comparer, outputSelector) {
+DataFrame.prototype.variableWindow = function (comparer, obsoleteSelector) {
+
 	assert.isFunction(comparer, "Expected 'comparer' parameter to 'variableWindow' to be a function.")
-	assert.isFunction(outputSelector, "Expected 'outputSelector' parameter to 'variableWindow' to be a function.")
+	assert(!obsoleteSelector, "Selector parameter is obsolete and no longer required.");
 
 	var self = this;
 
@@ -25362,6 +25409,7 @@ DataFrame.prototype.variableWindow = function (comparer, outputSelector) {
 
 		var startIndex = 0;
 		var takeAmount = 1;
+		var windowIndex = 0;
 
 		var prevPair = input[0]; // 1st pair.
 
@@ -25372,8 +25420,8 @@ DataFrame.prototype.variableWindow = function (comparer, outputSelector) {
 			if (!comparer(prevPair[1], curPair[1])) {
 
 				// Flush.
-				var outputPair = outputSelector(self.skip(startIndex).take(takeAmount));
-				output.push(outputPair);
+				output.push([windowIndex, self.skip(startIndex).take(takeAmount)]);
+				++windowIndex;
 
 				startIndex = i;
 				takeAmount = 1;
@@ -25386,8 +25434,7 @@ DataFrame.prototype.variableWindow = function (comparer, outputSelector) {
 		}
 
 		if (takeAmount > 0) {
-			var outputPair = outputSelector(self.skip(startIndex).take(takeAmount));
-			output.push(outputPair);			
+			output.push([windowIndex, self.skip(startIndex).take(takeAmount)]);
 		}
 	}
 
@@ -26741,20 +26788,15 @@ Series.prototype.slice = function (startIndexOrStartPredicate, endIndexOrEndPred
 };
 
 /**
- * Move a window over the series (batch by batch), invoke a selector for each window that builds a new series.
+ * Segment a Series into 'windows'. Returns a new Series. Each value in the new Series contains a 'window' (or segment) of the original Series.
+ * Use select or selectPairs to aggregate.
  *
- * @param {integer} period - The number of rows in the window.
- * @param {function} selector - The selector function invoked per row that builds the output series.
- *
- * The selector has the following parameters: 
- *
- *		window - Data-frame that represents the rolling window.
- *		windowIndex - The 0-based index of the window.
+ * @param {integer} period - The number of values in the window.
  */
-Series.prototype.window = function (period, selector) {
+Series.prototype.window = function (period, obsoleteSelector) {
 
 	assert.isNumber(period, "Expected 'period' parameter to 'window' to be a number.");
-	assert.isFunction(selector, "Expected 'selector' parameter to 'window' to be a function.");
+	assert(!obsoleteSelector, "Selector parameter is obsolete and no longer required.");
 
 	var self = this;
 
@@ -26762,17 +26804,19 @@ Series.prototype.window = function (period, selector) {
 		iterable: function () {
 
 			var curOutput = undefined;
-			var done = false;
 			var windowIndex = 0;
 
 			return {
 				moveNext: function () {
 					var window = self.skip(windowIndex*period).take(period);
-					if (window.count() === 0) {
-						return false; //todo: should use .any() function.
+					if (window.none(function () { return true; })) { //todo: Shouldn't have to pass a predicate.
+						return false; // Nothing left.
 					}
 
-					curOutput = selector(window, windowIndex);
+					curOutput = [
+						windowIndex, 
+						window,						
+					];
 					++windowIndex;
 					return true;
 				},
@@ -26787,20 +26831,15 @@ Series.prototype.window = function (period, selector) {
 };
 
 /** 
- * Move a rolling window over the series (row by row), invoke a selector for each window that builds a new series.
+ * Segment a Series into 'rolling windows'. Returns a new Series. Each value in the new Series contains a 'window' (or segment) of the original Series.
+ * Use select or selectPairs to aggregate.
  *
- * @param {integer} period - The number of rows in the window.
- * @param {function} selector - The selector function invoked per row that builds the output series.
- *
- * The selector has the following parameters: 
- *
- *		window - Series that represents the rolling window.
- *		windowIndex - The 0-based index of the window.
+ * @param {integer} period - The number of values in the window.
  */
-Series.prototype.rollingWindow = function (period, selector) {
+Series.prototype.rollingWindow = function (period, obsoleteSelector) {
 
 	assert.isNumber(period, "Expected 'period' parameter to 'rollingWindow' to be a number.");
-	assert.isFunction(selector, "Expected 'selector' parameter to 'rollingWindow' to be a function.");
+	assert(!obsoleteSelector, "Selector parameter is obsolete and no longer required.");
 
 	var self = this;
 
@@ -26818,7 +26857,10 @@ Series.prototype.rollingWindow = function (period, selector) {
 						return false;
 					}
 
-					curOutput = selector(window, windowIndex);
+					curOutput = [
+						windowIndex, 
+						window,						
+					];
 					++windowIndex;
 					return true;
 				},
@@ -26916,13 +26958,14 @@ Series.prototype.toString = function () {
 Series.prototype.percentChange = function () {
 
 	var self = this;
-	return self.rollingWindow(2, function (window) {
-		var index = window.getIndex().skip(1).first();
-		var values = window.toValues();
-		var amountChange = values[1] - values[0]; // Compute amount of change.
-		var pctChange = amountChange / values[0]; // Compute % change.
-		return [index, pctChange]; // Return new index and value.
-	});
+	return self
+		.rollingWindow(2)
+		.selectPairs(function (window) {
+			var values = window.toValues();
+			var amountChange = values[1] - values[0]; // Compute amount of change.
+			var pctChange = amountChange / values[0]; // Compute % change.
+			return [window.getIndex().last(), pctChange]; // Return new index and value.
+		});
 };
 
 /**
@@ -27212,7 +27255,7 @@ Series.prototype.count = function () {
 };
 
 /**
- * Get the first row of the series.
+ * Get the first value of the Series.
  */
 Series.prototype.first = function () {
 
@@ -27220,14 +27263,14 @@ Series.prototype.first = function () {
 	var iterator = self.getIterator();
 
 	if (!iterator.moveNext()) {
-		throw new Error("No rows in series.");
+		throw new Error("No values in Series.");
 	}
 
 	return iterator.getCurrent()[1];
 };
 
 /**
- * Get the last row of the series.
+ * Get the last value of the Series.
  */
 Series.prototype.last = function () {
 
@@ -27235,7 +27278,7 @@ Series.prototype.last = function () {
 	var iterator = self.getIterator();
 
 	if (!iterator.moveNext()) {
-		throw new Error("No rows in series.");
+		throw new Error("No values in Series.");
 	}
 
 	while (iterator.moveNext()) {
@@ -27243,6 +27286,40 @@ Series.prototype.last = function () {
 	}
 
 	return iterator.getCurrent()[1]; // Just evaluate the last item of the iterator.
+};
+
+/**
+ * Get the first index/value pair of the Series.
+ */
+Series.prototype.firstPair = function () {
+
+	var self = this;
+	var iterator = self.getIterator();
+
+	if (!iterator.moveNext()) {
+		throw new Error("No values in Series.");
+	}
+
+	return iterator.getCurrent();
+};
+
+/**
+ * Get the last index/value pair of the Series.
+ */
+Series.prototype.lastPair = function () {
+
+	var self = this;
+	var iterator = self.getIterator();
+
+	if (!iterator.moveNext()) {
+		throw new Error("No values in Series.");
+	}
+
+	while (iterator.moveNext()) {
+		; // Don't evaluate each item, it's too expensive.
+	}
+
+	return iterator.getCurrent();
 };
 
 /** 
@@ -27485,14 +27562,20 @@ Series.prototype.all = function (predicate) {
  * Returns true as soon as the predicate returns truthy.
  * Returns false if the predicate never returns truthy.
  *
- * @param {function} predicate - Predicate function that receives each value in turn and returns truthy for a match, otherwise falsy.
+ * @param {function} [predicate] - Optional predicate function that receives each value in turn and returns truthy for a match, otherwise falsy.
  */
 Series.prototype.any = function (predicate) {
-	assert.isFunction(predicate, "Expected 'predicate' parameter to 'any' to be a function.")
+	if (predicate) {
+		assert.isFunction(predicate, "Expected 'predicate' parameter to 'any' to be a function.")
+	}
 
 	var self = this;
 	var iterator = self.getIterator();
 	validateIterator(iterator);
+
+	if (!predicate) {
+		return iterator.moveNext();
+	}
 
 	while (iterator.moveNext()) {
 		var pair = iterator.getCurrent();
@@ -27510,14 +27593,20 @@ Series.prototype.any = function (predicate) {
  * Returns true if the predicate always returns falsy.
  * Otherwise returns false.
  *
- * @param {function} predicate - Predicate function that receives each value in turn and returns truthy for a match, otherwise falsy.
+ * @param {function} [predicate] - Optional predicate function that receives each value in turn and returns truthy for a match, otherwise falsy.
  */
 Series.prototype.none = function (predicate) {
-	assert.isFunction(predicate, "Expected 'predicate' parameter to 'none' to be a function.")
+	if (predicate) {
+		assert.isFunction(predicate, "Expected 'predicate' parameter to 'none' to be a function.")
+	}
 
 	var self = this;
 	var iterator = self.getIterator();
 	validateIterator(iterator);
+
+	if (!predicate) {
+		return !iterator.moveNext();
+	}
 
 	while (iterator.moveNext()) {
 		var pair = iterator.getCurrent();
@@ -27530,32 +27619,25 @@ Series.prototype.none = function (predicate) {
 };
 
 /**
- * Collapse a group of sequential values and produce a new series where duplicates are eliminated.
- * The selector function must return the index and value to use in the new series.
- *
- * @param {function} outputSelector - Selects the index and value to represent a collapsed group of values.
+ * Group sequential duplicate values into a Series of windows.
  */
-Series.prototype.sequentialDistinct = function (outputSelector) {
-	assert.isFunction(outputSelector, "Expected 'outputSelector' parameter to 'sequentialDistinct' to be a function.")
+Series.prototype.sequentialDistinct = function (obsoleteSelector) {
+	
+	assert(!obsoleteSelector, "Selector parameter is obsolete and no longer required.");
 
 	var self = this;
 
-	return self.variableWindow(
-		function (a, b) {
+	return self.variableWindow(function (a, b) {
 			return a === b;
-		},
-		outputSelector
-	);
+		});
 };
 
 /**
- * Collapse distinct values in the series.
- * The selector function must return the index and value to use in the new series.
- *
- * @param {function} outputSelector - Selects the index and value to represent a collapsed group of values.
+ * Group distinct values in the Series into a Series of windows.
  */
-Series.prototype.distinct = function (outputSelector) {
-	assert.isFunction(outputSelector, "Expected 'outputSelector' parameter to 'sequentialDistinct' to be a function.")
+Series.prototype.distinct = function (obsoleteSelector) {
+	
+	assert(!obsoleteSelector, "Selector parameter is obsolete and no longer required.");
 
 	var self = this;
 
@@ -27578,6 +27660,7 @@ Series.prototype.distinct = function (outputSelector) {
 		.toArray();
 
 	var output = [];
+	var windowIndex = 0;
 
 	for (var i = 0; i < input.length; ++i) {
 		var underConsideration = input[i];
@@ -27615,7 +27698,9 @@ Series.prototype.distinct = function (outputSelector) {
 				})
 				.toArray()
 		});
-		output.push(outputSelector(window));
+		
+		output.push([windowIndex, window]);
+		++windowIndex;
 	}
 
 	return new Series({
@@ -27633,26 +27718,18 @@ Series.prototype.distinct = function (outputSelector) {
 };
 
 /**
- * Groups sequential values into windows. The windows can then be collapsed.
- * The output selector function must return the index and value to use in the new series.
+ * Groups sequential values into variable length 'windows'. The windows can then be transformed/transformed using selectPairs or selectManyPairs.
  *
  * @param {function} comparer - Predicate that compares two values and returns true if they should be in the same window.
- * @param {function} outputSelector - Selects the index and value to represent a collapsed group of values.
  */
-Series.prototype.variableWindow = function (comparer, outputSelector) {
-	assert.isFunction(comparer, "Expected 'comparer' parameter to 'variableWindow' to be a function.")
-	assert.isFunction(outputSelector, "Expected 'outputSelector' parameter to 'variableWindow' to be a function.")
+Series.prototype.variableWindow = function (comparer, obsoleteSelector) {
+	
+	assert.isFunction(comparer, "Expected 'comparer' parameter to 'Series.variableWindow' to be a function.")
+	assert(!obsoleteSelector, "Selector parameter is obsolete and no longer required.");
 
 	var self = this;
 
 	//todo: make this lazy.
-
-	/* todo: Want to zip here, when zip can specify the index. 
-
-	series.zip(series.skip(1), function (prev, next) { 
-		});
-
-	*/
 
 	var input = self.toPairs();
 
@@ -27662,6 +27739,7 @@ Series.prototype.variableWindow = function (comparer, outputSelector) {
 
 		var startIndex = 0;
 		var takeAmount = 1;
+		var windowIndex = 0;
 
 		var prevPair = input[0]; // 1st pair.
 
@@ -27671,8 +27749,8 @@ Series.prototype.variableWindow = function (comparer, outputSelector) {
 			
 			if (!comparer(curPair[1], prevPair[1])) {
 				// Flush.
-				var outputPair = outputSelector(self.skip(startIndex).take(takeAmount));
-				output.push(outputPair);
+				output.push([windowIndex, self.skip(startIndex).take(takeAmount)]);
+				++windowIndex;
 
 				startIndex = i;
 				takeAmount = 1;
@@ -27685,8 +27763,7 @@ Series.prototype.variableWindow = function (comparer, outputSelector) {
 		}
 
 		if (takeAmount > 0) {
-			var outputPair = outputSelector(self.skip(startIndex).take(takeAmount));
-			output.push(outputPair);			
+			output.push([windowIndex, self.skip(startIndex).take(takeAmount)]);
 		}
 	}
 
