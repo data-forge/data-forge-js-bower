@@ -22,6 +22,29 @@ var Index = require('./src/index');
 var E = require('linq');
 
 //
+// Helper function to replicate a value.
+//
+var relicate = function (value, count) {
+	var output = [];
+	for (var i = 0; i < count; ++i) {
+		output.push(value);
+	}
+	return output;
+};
+
+//
+// Convert an object row to an array.
+// todo: Feels like a bit of a hack to use this.
+//
+var toRow = function (row, columnNames) {
+	return E.from(columnNames)
+		.select(function (columnName) {
+			return row[columnName];
+		})
+		.toArray();
+};
+
+//
 // Records plugins that have been registered.
 //
 var registeredPlugins = {};
@@ -164,73 +187,302 @@ var dataForge = {
 	 * @param {string} [columnName] - The name of the column to merge on. Optional, when not specified merge is based on the index.
 	 */
 	merge: function (leftDataFrame, rightDataFrame, columnName) {
+
+		//todo: refactor and DRY the two code paths here.
+		//todo: this probably just needs a rewrite so that multiple dataframes can be merged.
+
 		assert.isObject(leftDataFrame, "Expected 'leftDataFrame' parameter to 'merge' to be an object.");
 		assert.isObject(rightDataFrame, "Expected 'rightDataFrame' parameter to 'merge' to be an object.");
 
 		if (columnName) {
 			assert.isString(columnName, "Expected optional 'columnName' parameter to 'merge' to be a string.");
-		}
 
-		var leftColumnIndex = leftDataFrame.getColumnIndex(columnName);
-		if (leftColumnIndex < 0) {
-			throw new Error("Column with name '" + columnName + "' doesn't exist in 'leftDataFrame'.");
-		}
+			var leftColumnIndex = leftDataFrame.getColumnIndex(columnName);
+			if (leftColumnIndex < 0) {
+				throw new Error("Column with name '" + columnName + "' doesn't exist in 'leftDataFrame'.");
+			}
 
-		var rightColumnIndex = rightDataFrame.getColumnIndex(columnName);
-		if (rightColumnIndex < 0) {
-			throw new Error("Column with name '" + columnName + "' doesn't exist in 'rightColumnIndex'.");
-		}
+			var rightColumnIndex = rightDataFrame.getColumnIndex(columnName);
+			if (rightColumnIndex < 0) {
+				throw new Error("Column with name '" + columnName + "' doesn't exist in 'rightColumnIndex'.");
+			}
 
-		var leftRows = leftDataFrame.toValues();
-		var rightRows = rightDataFrame.toValues();
+			var leftPairs = leftDataFrame.toPairs();
+			var rightPairs = rightDataFrame.toPairs();
 
-		var mergedColumnNames = [columnName]
-			.concat(dropElement(leftDataFrame.getColumnNames(), leftColumnIndex))
-			.concat(dropElement(rightDataFrame.getColumnNames(), rightColumnIndex));
+			var mergedColumnNames = [columnName]
+				.concat(dropElement(leftDataFrame.getColumnNames(), leftColumnIndex))
+				.concat(dropElement(rightDataFrame.getColumnNames(), rightColumnIndex));
 
-		var rightMap = E.from(rightRows)
-			.groupBy(function (rightRow) {
-				return rightRow[rightColumnIndex];
-			})
-			.toObject(
-				function (group) {
-					return group.key();
+			var leftColumns = leftDataFrame.getColumnNames();
+			var rightColumns = rightDataFrame.getColumnNames();
+
+			var leftIndices = E.from(leftPairs)
+				.select(function (leftPair) {
+					return leftPair[1][leftColumns[leftColumnIndex]];
+				})
+				.toArray();
+			var rightIndices = E.from(rightPairs)
+				.select(function (rightPair) {
+					return rightPair[1][rightColumns[rightColumnIndex]];
+				})
+				.toArray();
+
+			var distinctIndices = E.from(leftIndices.concat(rightIndices)).distinct().toArray();
+
+			var leftMap = E.from(leftPairs)
+				.groupBy(function (leftPair) {
+					return leftPair[1][leftColumns[leftColumnIndex]];
+				})
+				.toObject(
+					function (group) {
+						return group.key();
+					},
+					function (group) {
+						return group.getSource();
+					}
+				);
+
+			var rightMap = E.from(rightPairs)
+				.groupBy(function (rightPair) {
+					return rightPair[1][rightColumns[rightColumnIndex]];
+				})
+				.toObject(
+					function (group) {
+						return group.key();
+					},
+					function (group) {
+						return group.getSource();
+					}
+				);
+
+			var outputIndices = [];
+
+			var mergedValues = E.from(distinctIndices) // Merge values, drop index.
+				.selectMany(function (index) {
+					var leftPairs = leftMap[index] || [];
+					var rightPairs = rightMap[index] || [];
+					var outputRows = [];
+
+					if (leftPairs.length > 0) {
+						leftPairs.forEach(function (leftPair) {
+							assert.isArray(leftPair);
+
+							if (rightPairs.length > 0) {
+								
+								rightPairs.forEach(function (rightPair) {
+									assert.isArray(rightPair);
+
+									var leftValues = dropElement(toRow(leftPair[1], leftColumns), leftColumnIndex);
+									var rightValues = dropElement(toRow(rightPair[1], rightColumns), rightColumnIndex);
+									var outputRow = [index]
+										.concat(leftValues)
+										.concat(rightValues)
+										;
+
+									outputIndices.push(leftPair[0]);
+									outputRows.push(outputRow);
+								});
+							}
+							else {
+								var leftValues = dropElement(toRow(leftPair[1], leftColumns), leftColumnIndex);
+								var rightValues = relicate(undefined, rightColumns.length-1);
+								var outputRow = [index]
+									.concat(leftValues)
+									.concat(rightValues)
+									;
+
+								outputIndices.push(leftPair[0]);
+								outputRows.push(outputRow);
+							}
+						});						
+					}
+					else {
+						rightPairs.forEach(function (rightPair) {
+							assert.isArray(rightPair);
+
+							var leftValues = relicate(undefined, leftColumns.length-1);
+							var rightValues = dropElement(toRow(rightPair[1], rightColumns), rightColumnIndex);
+							var outputRow = [index]
+								.concat(leftValues)
+								.concat(rightValues)
+								;
+							
+							outputIndices.push(rightPair[0]);
+							outputRows.push(outputRow);
+						});
+					}
+
+					return outputRows;
+				})
+				.toArray();
+
+			return new DataFrame({
+				columnNames: mergedColumnNames,
+				rows: function () {
+					return new ArrayIterator(mergedValues);
 				},
-				function (group) {
-					return group.getSource();
-				}
-			);
+				index: outputIndices,
+			});			
+		}
+		else {
+			var leftPairs = leftDataFrame.toPairs();
+			var rightPairs = rightDataFrame.toPairs();
 
-		var mergedValues = E.from(leftRows) // Merge values, drop index.
-			.selectMany(function (leftRow) {
-				var rightRows = rightMap[leftRow[leftColumnIndex]] || [];
-				return E.from(rightRows)
-					.select(function (rightRow) {
-						var combined = [leftRow[leftColumnIndex]];
-						
-						for (var i = 0; i < leftRow.length; ++i) {
-							if (i !== leftColumnIndex) {
-								combined.push(leftRow[i]);
+			var leftColumns = leftDataFrame.getColumnNames();
+			var rightColumns = rightDataFrame.getColumnNames();
+			var mergedColumnNames = leftColumns.concat(rightColumns);
+
+			var leftIndices = leftDataFrame.getIndex().toValues();
+			var rightIndices = rightDataFrame.getIndex().toValues();
+			var distinctIndices = E.from(leftIndices.concat(rightIndices)).distinct().toArray();
+
+			var leftMap = E.from(leftPairs)
+				.groupBy(function (leftPair) {
+					return leftPair[0];
+				})
+				.toObject(
+					function (group) {
+						return group.key();
+					},
+					function (group) {
+						return group.getSource();
+					}
+				);
+
+			var rightMap = E.from(rightPairs)
+				.groupBy(function (rightPair) {
+					return rightPair[0];
+				})
+				.toObject(
+					function (group) {
+						return group.key();
+					},
+					function (group) {
+						return group.getSource();
+					}
+				);
+
+			var outputIndices = [];
+
+			var mergedValues = E.from(distinctIndices) 
+				.selectMany(function (index) {
+					var leftPairs = leftMap[index] || [];
+					var rightPairs = rightMap[index] || [];
+					var outputRows = [];
+
+					if (leftPairs.length > 0) {
+						leftPairs.forEach(function (leftPair) {
+							assert.isArray(leftPair);
+
+							if (rightPairs.length > 0) {
+								
+								rightPairs.forEach(function (rightPair) {
+									assert.isArray(rightPair);
+
+									outputIndices.push(index);
+
+									var outputRow = [];
+
+									leftColumns.forEach(function (leftColumnName) {
+										outputRow.push(leftPair[1][leftColumnName]);
+									});
+
+									rightColumns.forEach(function (rightColumnName) {
+										outputRow.push(rightPair[1][rightColumnName]);
+									});
+
+									outputRows.push(outputRow);
+								});
 							}
-						}
+							else {
+								outputIndices.push(index);
 
-						for (var i = 0; i < rightRow.length; ++i) {
-							if (i !== rightColumnIndex) {
-								combined.push(rightRow[i]);
+								var outputRow = [];
+
+								leftColumns.forEach(function (leftColumnName) {
+									outputRow.push(leftPair[1][leftColumnName]);
+								});
+
+								for (var i = 0; i < rightColumns.length; ++i) {
+									outputRow.push(undefined);
+								}
+
+								outputRows.push(outputRow);
 							}
-						}
+						});
+					}
+					else {
+						rightPairs.forEach(function (rightPair) {
+							assert.isArray(rightPair);
 
-						return combined;
-					});
-			})
-			.toArray();
+							outputIndices.push(index);
 
-		return new DataFrame({
-			columnNames: mergedColumnNames,
-			rows: function () {
-				return new ArrayIterator(mergedValues);
-			},
+							var outputRow = [];
+
+							for (var i = 0; i < leftColumns.length; ++i) {
+								outputRow.push(undefined);
+							}
+
+							rightColumns.forEach(function (rightColumnName) {
+								outputRow.push(rightPair[1][rightColumnName]);
+							});
+
+							outputRows.push(outputRow);
+						});
+					}
+
+					return outputRows;
+				})
+				.toArray();
+
+			return new DataFrame({
+				columnNames: mergedColumnNames,
+				rows: function () {
+					return new ArrayIterator(mergedValues);
+				},
+				index: outputIndices,
+			});			
+		}
+
+	},
+
+	/**
+	 * Merge multiple series into a new DataFrame.
+	 * 
+	 * @param {array} columnNames - Array of strings that defines the column names for the resulting DataFrame. Must have the same number of elements as the 'series' parameter.
+	 * @param {array} series - Array of series that defined the values for the columns. Must have the same number of elements as the 'columnNames' parameter.
+	 */
+	mergeSeries: function (columnNames, series) {
+		assert.isArray(columnNames, "Expected 'columnNames' parameter of dataForge.mergeSeries to be an array of strings that specify column names in the resulting DataFrame.");
+		assert.isArray(series, "Expected 'series' parameter of dataForge.mergeSeries to be an array of Series objects that specify the values for the columns in the resulting DataFrame.");
+
+		columnNames.forEach(function (columnName) {
+			//todo: specify bad index.
+			assert.isString(columnName, "Expected 'columnNames' parameter of dataForge.mergeSeries to be an array of strings that specify column names in the resulting DataFrame.");
 		});
+
+		series.forEach(function (series) {
+			//todo: specify bad index.
+			assert.instanceOf(series, Series, "Expected 'series' parameter of dataForge.mergeSeries to be an array of Series objects that specify the values for the columns in the resulting DataFrame.");
+		});
+
+		assert(columnNames.length === series.length, "Expect 'columnNames' and 'series' parameters to dataForge.mergeSeries to be arrays with the same length. columnNames has length " + columnNames.length + ", series has length " + series.length);
+
+		var distinctColumnNames = E.from(columnNames).distinct().toArray();
+		assert(distinctColumnNames.length === columnNames.length, "Only distinct column names are allowed, please remove duplicates from: " + columnNames.join(', ') + ".");
+
+		return E.from(columnNames)
+			.zip(series, function (columnName, series) {
+				return series.inflate(function (value) {
+					var output = {};
+					output[columnName] = value;
+					return output;
+				});
+			})
+			.aggregate(function (mergedDataFrame, toMerge) { //todo: just call the function that will merge multiple DFs
+				return mergedDataFrame.merge(toMerge);
+			});
 	},
 
 	/**
@@ -26729,6 +26981,61 @@ DataFrame.prototype.variableWindow = function (comparer, obsoleteSelector) {
 					.toArray()
 			)
 	});
+};
+
+/**
+ * Reshape (or pivot) a table based on column values.
+ *
+ * @param {string} column - Column name whose values make the new DataFrame's columns.
+ * @param {string} value - Column name whose values populate the new DataFrame's values.
+ */
+DataFrame.prototype.pivot = function (column, value) {
+	var self = this;
+
+	assert.isString(column, "Expected 'column' parameter to DataFrame.pivot to be a string that identifies the column whose values make the new DataFrame's columns.");
+	assert.isString(value, "Expected 'value' parameter to DataFrame.pivot to be a string that identifies the column whose values make the new DataFrame's values.");
+
+	if (!self.hasSeries(column)) {
+		throw new Error("Expected to find a column with name '" + column + "'.");
+	}
+
+	if (!self.hasSeries(value)) {
+		throw new Error("Expected to find a column with name '" + value + "'.");
+	}
+
+	var newColumnNames = self.getSeries(column).distinct().toValues();
+
+	var newSeries = E.from(newColumnNames) // Create a series for each column
+		.select(function (columnName) {
+			return self
+				.where(function (row) {
+					return row[column] === columnName;
+				})
+				.deflate(function (row) {
+					return row[value];
+				});
+		})
+		.toArray();
+
+	var dataForge = require('../index');
+	return dataForge.mergeSeries(newColumnNames, newSeries);
+};
+
+/**
+ * Merge this DataFrame with another.
+ *
+ * @param {DataFrame} otherDataFrame - The other DataFrame to merge in.
+ * @param {string} [columnName] - Optional column name used to join the DataFrames. Omit to merge on index.
+ */
+DataFrame.prototype.merge = function (otherDataFrame, columnName) {
+	assert.instanceOf(otherDataFrame, DataFrame, "Expected 'otherDataFrame' parameter of DataFrame.merge to be a DataFrame.");
+	if (columnName) {
+		assert.isString(columnName, "Expected optional 'columnName' parameter of DataFrame.merge to be a string that specifies the column to join the DataFrame on.");
+	}
+
+	var self = this;
+	var dataForge = require('../index');
+	return dataForge.merge(self, otherDataFrame, columnName);
 };
 
 module.exports = DataFrame;
