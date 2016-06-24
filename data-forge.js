@@ -26738,6 +26738,22 @@ DataFrame.prototype.groupBy = function (selector) {
 };
 
 /**
+ * Collapse a group of sequential rows with duplicate column values into a Series of windows.
+ *
+ * @param {function} valueSelector - Selects the value used to compare for duplicates.
+ */	
+DataFrame.prototype.groupSequential = function (valueSelector) {
+
+	assert.isFunction(valueSelector, "Expected 'valueSelector' parameter to 'sequentialDistinct' to be a function.")
+
+	var self = this;
+
+	return self.variableWindow(function (a, b) {
+			return valueSelector(a) === valueSelector(b);
+		});
+};
+
+/**
  * Determine if the predicate returns truthy for all values.
  * Returns false as soon as the predicate evaluates to falsy.
  * Returns true if the predicate returns truthy for all values in the DataFrame.
@@ -26775,7 +26791,7 @@ DataFrame.prototype.all = function (predicate) {
  */
 DataFrame.prototype.any = function (predicate) {
 	if (predicate) {
-		assert.isFunction(predicate, "Expected 'predicate' parameter to 'all' to be a function.")
+		assert.isFunction(predicate, "Expected 'predicate' parameter to 'DataFrame.any' to be a function.")
 	}
 
 	var self = this;
@@ -26841,6 +26857,9 @@ DataFrame.prototype.sequentialDistinct = function (valueSelector, obsoleteSelect
 
 	return self.variableWindow(function (a, b) {
 			return valueSelector(a) === valueSelector(b);
+		})
+		.selectPairs(function (window) {
+			return [window.getIndex().first(), window.first()];
 		});
 };
 
@@ -27036,6 +27055,131 @@ DataFrame.prototype.merge = function (otherDataFrame, columnName) {
 	var self = this;
 	var dataForge = require('../index');
 	return dataForge.merge(self, otherDataFrame, columnName);
+};
+
+/**
+ * Inesrt a pair to the start of a DataFrame.
+ *
+ * @param {pair} pair - The pair to insert.
+ */
+DataFrame.prototype.insert = function (pair) {
+	assert.isArray(pair, "Expected 'pair' parameter to 'DataFrame.insert' to be an array.");
+	assert(pair.length === 2, "Expected 'pair' parameter to 'DataFrame.insert' to be an array with two elements. The first element is the index, the second is the row.");
+
+	//todo: make this lazy.
+
+	var self = this;
+	var pairs = [pair].concat(self.toPairs());
+	return new DataFrame({
+		iterable: function () {
+			return new ArrayIterator(pairs);
+		},
+	});
+};
+
+/**
+ * Append a pair to the end of a DataFrame.
+ *
+ * @param {pair} pair - The pair to append.
+ */
+DataFrame.prototype.append = function (pair) {
+	assert.isArray(pair, "Expected 'pair' parameter to 'DataFrame.append' to be an array.");
+	assert(pair.length === 2, "Expected 'pair' parameter to 'DataFrame.append' to be an array with two elements. The first element is the index, the second is the row.");
+
+	//todo: make this lazy.
+
+	var self = this;
+	var pairs = self.toPairs();
+	pairs.push(pair);
+	return new DataFrame({
+		iterable: function () {
+			return new ArrayIterator(pairs);
+		},
+	});
+};
+
+/**
+ * Fill gaps in a DataFrame.
+ *
+ * @param {function} predicate - Predicate that is passed pairA and pairB, two consecutive rows, return truthy if there is a gap between the rows, or falsey if there is no gap.
+ * @param {function} generator - Generator that is passed pairA and pairB, two consecutive rows, returns an array of pairs that fills the gap between the rows.
+ */
+DataFrame.prototype.fillGaps = function (predicate, generator) {
+	assert.isFunction(predicate, "Expected 'predicate' parameter to 'DataFrame.fillGaps' to be a predicate function that returns a boolean.")
+	assert.isFunction(generator, "Expected 'generator' parameter to 'DataFrame.fillGaps' to be a generator function that returns an array of generated pairs.")
+
+	var self = this;
+
+	return self.rollingWindow(2)
+		.selectManyPairs(function (window) {
+			var pairA = window.firstPair();
+			var pairB = window.lastPair();
+			if (!predicate(pairA, pairB)) {
+				return [pairA];
+			}
+
+			var generatedRows = generator(pairA, pairB);
+			assert.isArray(generatedRows, "Expected return from 'generator' parameter to 'DataFrame.fillGaps' to be an array of pairs, instead got a " + typeof(generatedRows));
+
+			return [pairA].concat(generatedRows);
+		})
+		.inflate()
+		.append(self.lastPair())
+		;
+};
+
+/**
+ * Get the row at a specified index.
+ *
+ * @param {function} index - Index to for which to retreive the row.
+ */
+DataFrame.prototype.at = function (index) {
+
+	var self = this;
+	var search = self.skipWhile(function (value, searchIndex) { //todo: This could be optimized by using a type-specific index.
+			return searchIndex !== index;
+		});
+
+	if (search.none()) {
+		return undefined;
+	}
+
+	return search.first();
+};
+
+/**
+ * Returns true if the DataFrame contains the specified row.
+ *
+ * @param {function} row - The row to check for in the DataFrame.
+ */
+DataFrame.prototype.contains = function (row) {
+
+	var self = this;
+	var json = JSON.stringify(row); //todo: This feels somewhat dodgey.
+
+	return self.any(function (searchRow) {
+			return JSON.stringify(searchRow) === json;
+		});
+};
+
+/**
+ * Concatenate a data-frame on the end of this one and return the concatenated data-frame.
+ *
+ * @param {DataFrame} otherDataFrame - The data-frame to concatenate to the end of this one.
+ */
+DataFrame.prototype.concat = function (otherDataFrame) {
+
+	assert.instanceOf(otherDataFrame, DataFrame, "Expected 'otherDataFrame' parameter to 'DataFrame.concat' to be an instance of DataFrame.");
+
+	//todo: make this lazy.
+
+	var self = this;
+
+	return new DataFrame({
+		iterable: function () {
+			return new ArrayIterator(self.toPairs().concat(otherDataFrame.toPairs()))
+		},
+	})
 };
 
 module.exports = DataFrame;
@@ -29018,6 +29162,10 @@ Series.prototype.tail = function (values) {
 Series.prototype.sum = function () {
 
 	var self = this;
+	if (self.none()) {
+		return 0;
+	}
+
 	return self.aggregate(
 		function (prev, value) {
 			return prev + value;
@@ -29254,6 +29402,9 @@ Series.prototype.sequentialDistinct = function (obsoleteSelector) {
 
 	return self.variableWindow(function (a, b) {
 			return a === b;
+		})
+		.selectPairs(function (window) {
+			return [window.getIndex().first(), window.first()];
 		});
 };
 
@@ -29381,6 +29532,176 @@ Series.prototype.variableWindow = function (comparer, obsoleteSelector) {
 					.toArray()
 			)
 	});
+};
+
+/**
+ * Insert a pair at the start of a Series.
+ *
+ * @param {pair} pair - The pair to insert.
+ */
+Series.prototype.insert = function (pair) {
+	assert.isArray(pair, "Expected 'pair' parameter to 'Series.insert' to be an array.");
+	assert(pair.length === 2, "Expected 'pair' parameter to 'Series.insert' to be an array with two elements. The first element is the index, the second is the value.");
+
+	//todo: make this lazy.
+
+	var self = this;
+	var pairs = [pair].concat(self.toPairs());
+	return new Series({
+		iterable: function () {
+			return new ArrayIterator(pairs);
+		},
+	});
+};
+
+/**
+ * Append a pair to the end of a Series.
+ *
+ * @param {pair} pair - The pair to append.
+ */
+Series.prototype.append = function (pair) {
+	assert.isArray(pair, "Expected 'pair' parameter to 'Series.append' to be an array.");
+	assert(pair.length === 2, "Expected 'pair' parameter to 'Series.append' to be an array with two elements. The first element is the index, the second is the value.");
+
+	//todo: make this lazy.
+
+	var self = this;
+	var pairs = self.toPairs();
+	pairs.push(pair);
+	return new Series({
+		iterable: function () {
+			return new ArrayIterator(pairs);
+		},
+	});
+};
+
+
+/**
+ * Fill gaps in a series.
+ *
+ * @param {function} predicate - Predicate that is passed pairA and pairB, two consecutive rows, return truthy if there is a gap between the rows, or falsey if there is no gap.
+ * @param {function} generator - Generator that is passed pairA and pairB, two consecutive rows, returns an array of pairs that fills the gap between the rows.
+ */
+Series.prototype.fillGaps = function (predicate, generator) {
+	assert.isFunction(predicate, "Expected 'predicate' parameter to 'Series.fillGaps' to be a predicate function that returns a boolean.")
+	assert.isFunction(generator, "Expected 'generator' parameter to 'Series.fillGaps' to be a generator function that returns an array of generated pairs.")
+
+	var self = this;
+
+	return self.rollingWindow(2)
+		.selectManyPairs(function (window) {
+			var pairA = window.firstPair();
+			var pairB = window.lastPair();
+			if (!predicate(pairA, pairB)) {
+				return [pairA];
+			}
+
+			var generatedRows = generator(pairA, pairB);
+			assert.isArray(generatedRows, "Expected return from 'generator' parameter to 'Series.fillGaps' to be an array of pairs, instead got a " + typeof(generatedRows));
+
+			return [pairA].concat(generatedRows);
+		})
+		.append(self.lastPair())
+		;
+};
+
+/**
+ * Group the series according to the selector.
+ *
+ * @param {function} selector - Selector that defines the value to group by.
+ */
+Series.prototype.groupBy = function (selector) {
+
+	assert.isFunction(selector, "Expected 'selector' parameter to 'Series.groupBy' to be a selector function that determines the value to group the series by.")
+	
+	var self = this;
+	var groupedPairs = E.from(self.toPairs())
+		.groupBy(function (pair) {
+			return selector(pair[1], pair[0]);
+		})
+		.select(function (group) {
+			return [
+				group.key(),
+				new Series({
+					iterable: function () {
+						return new ArrayIterator(group.getSource());
+					},
+				}),
+			];
+		})
+		.toArray();
+
+	return new Series({
+		iterable: function () {
+			return new ArrayIterator(groupedPairs);
+		},
+	});
+
+
+};
+
+/**
+ * Group sequential duplicate values into a Series of windows.
+ */
+Series.prototype.groupSequential = function () {
+	
+	var self = this;
+
+	return self.variableWindow(function (a, b) {
+			return a === b;
+		});
+};
+
+/**
+ * Get the value at a specified index.
+ *
+ * @param {function} index - Index to for which to retreive the value.
+ */
+Series.prototype.at = function (index) {
+
+	var self = this;
+	var search = self.skipWhile(function (value, searchIndex) { //todo: This could be optimized by using a type-specific index.
+			return searchIndex !== index;
+		});
+
+	if (search.none()) {
+		return undefined;
+	}
+
+	return search.first();
+};
+
+/**
+ * Returns true if the Series contains the specified value.
+ *
+ * @param {function} value - The value to check for in the Series.
+ */
+Series.prototype.contains = function (value) {
+
+	var self = this;
+	return self.any(function (searchValue) {
+			return searchValue === value;
+		});
+};
+
+/**
+ * Concatenate a series on the end of this one and return the concatenated series.
+ *
+ * @param {Series} otherSeries - The series to concatenate to the end of this one.
+ */
+Series.prototype.concat = function (otherSeries) {
+
+	assert.instanceOf(otherSeries, Series, "Expected 'otherSeries' parameter to 'Series.concat' to be an instance of Series.");
+
+	//todo: make this lazy.
+
+	var self = this;
+
+	return new Series({
+		iterable: function () {
+			return new ArrayIterator(self.toPairs().concat(otherSeries.toPairs()))
+		},
+	})
 };
 
 module.exports = Series;
