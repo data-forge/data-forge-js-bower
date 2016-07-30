@@ -7,9 +7,6 @@ window.dataForge = require('../data-forge-js/index');
 
 var assert = require('chai').assert;
 var E = require('linq');
-var dropElement = require('./src/utils').dropElement;
-var ArrayIterator = require('./src/iterators/array');
-var ConcatIterator = require('./src/iterators/concat');
 var SelectIterator = require('./src/iterators/select');
 var MultiIterator = require('./src/iterators/multi');
 require('sugar');
@@ -20,29 +17,6 @@ var DataFrame = require('./src/dataframe');
 var Series = require('./src/series');
 var Index = require('./src/index');
 var E = require('linq');
-
-//
-// Helper function to replicate a value.
-//
-var relicate = function (value, count) {
-	var output = [];
-	for (var i = 0; i < count; ++i) {
-		output.push(value);
-	}
-	return output;
-};
-
-//
-// Convert an object row to an array.
-// todo: Feels like a bit of a hack to use this.
-//
-var toRow = function (row, columnNames) {
-	return E.from(columnNames)
-		.select(function (columnName) {
-			return row[columnName];
-		})
-		.toArray();
-};
 
 //
 // Records plugins that have been registered.
@@ -66,8 +40,25 @@ var registeredPlugins = {};
  */
 var dataForge = {
 	
+	/**
+	 * Constructor for DataFrame.
+	 *
+	 * @param {object} config - Specifies content and configuration for the DataFrame.
+	 */
 	DataFrame: DataFrame,
+
+	/**
+	 * Constructor for Series.
+	 *
+	 * @param {object} config - Specifies content and configuration for the Series.
+	 */
 	Series: Series,
+
+	/**
+	 * Constructor for Index.
+	 *
+	 * @param {array} values - Array of values to include in the index.
+	 */
 	Index: Index,
 
 	/**
@@ -111,7 +102,7 @@ var dataForge = {
 	},
 
 	//
-	// Deserialize a data from a CSV text string.
+	// Deserialize a DataFrame from a CSV text string.
 	//
 	fromCSV: function (csvTextString, config) {
 		assert.isString(csvTextString, "Expected 'csvTextString' parameter to 'dataForge.fromCSV' to be a string containing data encoded in the CSV format.");
@@ -186,266 +177,7 @@ var dataForge = {
 	 * @param {DataFrame} rightDataFrame - The other data frame to merge.
 	 * @param {string} [columnName] - The name of the column to merge on. Optional, when not specified merge is based on the index.
 	 */
-	merge: function (leftDataFrame, rightDataFrame, columnName) {
-
-		//todo: refactor and DRY the two code paths here.
-		//todo: this probably just needs a rewrite so that multiple dataframes can be merged.
-
-		assert.isObject(leftDataFrame, "Expected 'leftDataFrame' parameter to 'merge' to be an object.");
-		assert.isObject(rightDataFrame, "Expected 'rightDataFrame' parameter to 'merge' to be an object.");
-
-		if (columnName) {
-			assert.isString(columnName, "Expected optional 'columnName' parameter to 'merge' to be a string.");
-
-			var leftColumnIndex = leftDataFrame.getColumnIndex(columnName);
-			if (leftColumnIndex < 0) {
-				throw new Error("Column with name '" + columnName + "' doesn't exist in 'leftDataFrame'.");
-			}
-
-			var rightColumnIndex = rightDataFrame.getColumnIndex(columnName);
-			if (rightColumnIndex < 0) {
-				throw new Error("Column with name '" + columnName + "' doesn't exist in 'rightColumnIndex'.");
-			}
-
-			var leftPairs = leftDataFrame.toPairs();
-			var rightPairs = rightDataFrame.toPairs();
-
-			var mergedColumnNames = [columnName]
-				.concat(dropElement(leftDataFrame.getColumnNames(), leftColumnIndex))
-				.concat(dropElement(rightDataFrame.getColumnNames(), rightColumnIndex));
-
-			var leftColumns = leftDataFrame.getColumnNames();
-			var rightColumns = rightDataFrame.getColumnNames();
-
-			var leftIndices = E.from(leftPairs)
-				.select(function (leftPair) {
-					return leftPair[1][leftColumns[leftColumnIndex]];
-				})
-				.toArray();
-			var rightIndices = E.from(rightPairs)
-				.select(function (rightPair) {
-					return rightPair[1][rightColumns[rightColumnIndex]];
-				})
-				.toArray();
-
-			var distinctIndices = E.from(leftIndices.concat(rightIndices)).distinct().toArray();
-
-			var leftMap = E.from(leftPairs)
-				.groupBy(function (leftPair) {
-					return leftPair[1][leftColumns[leftColumnIndex]];
-				})
-				.toObject(
-					function (group) {
-						return group.key();
-					},
-					function (group) {
-						return group.getSource();
-					}
-				);
-
-			var rightMap = E.from(rightPairs)
-				.groupBy(function (rightPair) {
-					return rightPair[1][rightColumns[rightColumnIndex]];
-				})
-				.toObject(
-					function (group) {
-						return group.key();
-					},
-					function (group) {
-						return group.getSource();
-					}
-				);
-
-			var outputIndices = [];
-
-			var mergedValues = E.from(distinctIndices) // Merge values, drop index.
-				.selectMany(function (index) {
-					var leftPairs = leftMap[index] || [];
-					var rightPairs = rightMap[index] || [];
-					var outputRows = [];
-
-					if (leftPairs.length > 0) {
-						leftPairs.forEach(function (leftPair) {
-							assert.isArray(leftPair);
-
-							if (rightPairs.length > 0) {
-								
-								rightPairs.forEach(function (rightPair) {
-									assert.isArray(rightPair);
-
-									var leftValues = dropElement(toRow(leftPair[1], leftColumns), leftColumnIndex);
-									var rightValues = dropElement(toRow(rightPair[1], rightColumns), rightColumnIndex);
-									var outputRow = [index]
-										.concat(leftValues)
-										.concat(rightValues)
-										;
-
-									outputIndices.push(leftPair[0]);
-									outputRows.push(outputRow);
-								});
-							}
-							else {
-								var leftValues = dropElement(toRow(leftPair[1], leftColumns), leftColumnIndex);
-								var rightValues = relicate(undefined, rightColumns.length-1);
-								var outputRow = [index]
-									.concat(leftValues)
-									.concat(rightValues)
-									;
-
-								outputIndices.push(leftPair[0]);
-								outputRows.push(outputRow);
-							}
-						});						
-					}
-					else {
-						rightPairs.forEach(function (rightPair) {
-							assert.isArray(rightPair);
-
-							var leftValues = relicate(undefined, leftColumns.length-1);
-							var rightValues = dropElement(toRow(rightPair[1], rightColumns), rightColumnIndex);
-							var outputRow = [index]
-								.concat(leftValues)
-								.concat(rightValues)
-								;
-							
-							outputIndices.push(rightPair[0]);
-							outputRows.push(outputRow);
-						});
-					}
-
-					return outputRows;
-				})
-				.toArray();
-
-			return new DataFrame({
-				columnNames: mergedColumnNames,
-				rows: function () {
-					return new ArrayIterator(mergedValues);
-				},
-				index: outputIndices,
-			});			
-		}
-		else {
-			var leftPairs = leftDataFrame.toPairs();
-			var rightPairs = rightDataFrame.toPairs();
-
-			var leftColumns = leftDataFrame.getColumnNames();
-			var rightColumns = rightDataFrame.getColumnNames();
-			var mergedColumnNames = leftColumns.concat(rightColumns);
-
-			var leftIndices = leftDataFrame.getIndex().toValues();
-			var rightIndices = rightDataFrame.getIndex().toValues();
-			var distinctIndices = E.from(leftIndices.concat(rightIndices)).distinct().toArray();
-
-			var leftMap = E.from(leftPairs)
-				.groupBy(function (leftPair) {
-					return leftPair[0];
-				})
-				.toObject(
-					function (group) {
-						return group.key();
-					},
-					function (group) {
-						return group.getSource();
-					}
-				);
-
-			var rightMap = E.from(rightPairs)
-				.groupBy(function (rightPair) {
-					return rightPair[0];
-				})
-				.toObject(
-					function (group) {
-						return group.key();
-					},
-					function (group) {
-						return group.getSource();
-					}
-				);
-
-			var outputIndices = [];
-
-			var mergedValues = E.from(distinctIndices) 
-				.selectMany(function (index) {
-					var leftPairs = leftMap[index] || [];
-					var rightPairs = rightMap[index] || [];
-					var outputRows = [];
-
-					if (leftPairs.length > 0) {
-						leftPairs.forEach(function (leftPair) {
-							assert.isArray(leftPair);
-
-							if (rightPairs.length > 0) {
-								
-								rightPairs.forEach(function (rightPair) {
-									assert.isArray(rightPair);
-
-									outputIndices.push(index);
-
-									var outputRow = [];
-
-									leftColumns.forEach(function (leftColumnName) {
-										outputRow.push(leftPair[1][leftColumnName]);
-									});
-
-									rightColumns.forEach(function (rightColumnName) {
-										outputRow.push(rightPair[1][rightColumnName]);
-									});
-
-									outputRows.push(outputRow);
-								});
-							}
-							else {
-								outputIndices.push(index);
-
-								var outputRow = [];
-
-								leftColumns.forEach(function (leftColumnName) {
-									outputRow.push(leftPair[1][leftColumnName]);
-								});
-
-								for (var i = 0; i < rightColumns.length; ++i) {
-									outputRow.push(undefined);
-								}
-
-								outputRows.push(outputRow);
-							}
-						});
-					}
-					else {
-						rightPairs.forEach(function (rightPair) {
-							assert.isArray(rightPair);
-
-							outputIndices.push(index);
-
-							var outputRow = [];
-
-							for (var i = 0; i < leftColumns.length; ++i) {
-								outputRow.push(undefined);
-							}
-
-							rightColumns.forEach(function (rightColumnName) {
-								outputRow.push(rightPair[1][rightColumnName]);
-							});
-
-							outputRows.push(outputRow);
-						});
-					}
-
-					return outputRows;
-				})
-				.toArray();
-
-			return new DataFrame({
-				columnNames: mergedColumnNames,
-				rows: function () {
-					return new ArrayIterator(mergedValues);
-				},
-				index: outputIndices,
-			});			
-		}
-
-	},
+	merge: require('./src/merge-dataframes.js'),
 
 	/**
 	 * Merge multiple series into a new DataFrame.
@@ -453,71 +185,14 @@ var dataForge = {
 	 * @param {array} columnNames - Array of strings that defines the column names for the resulting DataFrame. Must have the same number of elements as the 'series' parameter.
 	 * @param {array} series - Array of series that defined the values for the columns. Must have the same number of elements as the 'columnNames' parameter.
 	 */
-	mergeSeries: function (columnNames, series) {
-		assert.isArray(columnNames, "Expected 'columnNames' parameter of dataForge.mergeSeries to be an array of strings that specify column names in the resulting DataFrame.");
-		assert.isArray(series, "Expected 'series' parameter of dataForge.mergeSeries to be an array of Series objects that specify the values for the columns in the resulting DataFrame.");
-
-		columnNames.forEach(function (columnName) {
-			//todo: specify bad index.
-			assert.isString(columnName, "Expected 'columnNames' parameter of dataForge.mergeSeries to be an array of strings that specify column names in the resulting DataFrame.");
-		});
-
-		series.forEach(function (series) {
-			//todo: specify bad index.
-			assert.instanceOf(series, Series, "Expected 'series' parameter of dataForge.mergeSeries to be an array of Series objects that specify the values for the columns in the resulting DataFrame.");
-		});
-
-		assert(columnNames.length === series.length, "Expect 'columnNames' and 'series' parameters to dataForge.mergeSeries to be arrays with the same length. columnNames has length " + columnNames.length + ", series has length " + series.length);
-
-		var distinctColumnNames = E.from(columnNames).distinct().toArray();
-		assert(distinctColumnNames.length === columnNames.length, "Only distinct column names are allowed, please remove duplicates from: " + columnNames.join(', ') + ".");
-
-		return E.from(columnNames)
-			.zip(series, function (columnName, series) {
-				return series.inflate(function (value) {
-					var output = {};
-					output[columnName] = value;
-					return output;
-				});
-			})
-			.aggregate(function (mergedDataFrame, toMerge) { //todo: just call the function that will merge multiple DFs
-				return mergedDataFrame.merge(toMerge);
-			});
-	},
+	mergeSeries: require('./src/merge-series'),
 
 	/**
 	 * Concatenate multiple data frames into a single.
 	 *
 	 * @param {array} dataFrames - Array of data frames to concatenate.
 	 */
-	concat: function (dataFrames) {
-		assert.isArray(dataFrames, "Expected 'dataFrames' parameter to 'dataForge.concat' to be an array of data frames.");
-
-		var concatenateColumns = function () {
-			return E.from(dataFrames)
-				.selectMany(function (dataFrame) {
-					return dataFrame.getColumnNames();
-				})
-				.distinct()
-				.toArray();
-		};
-
-		return new DataFrame({
-			columnNames: concatenateColumns(),
-			iterable: function () {
-				var concatenatedColumns = concatenateColumns();
-				var iterators = E.from(dataFrames)
-					.select(function (dataFrame) {
-						return dataFrame.remapColumns(concatenatedColumns);
-					})
-					.select(function (dataFrame) {
-						return dataFrame.getIterator();
-					})						
-					.toArray()
-				return new ConcatIterator(iterators);
-			},
-		});
-	},
+	concat: require('./src/concat-dataframes'),
 
 	/**
 	 * Generate a series from a range of numbers.
@@ -593,91 +268,25 @@ var dataForge = {
 		})
 	},
 
-	/*
+	/**
 	 * Zip together multiple series to create a new series.
 	 *
 	 * @param {array} series - Array of series to zip together.
 	 * @param {function} selector - Selector function that produces a new series based on the input series.
 	 */
-	zipSeries: function (series, selector) {
+	zipSeries: require('./src/zip-series'),
 
-		assert.isArray(series, "Expected 'series' parameter to zipSeries to be an array of Series objects.");
-		assert.isFunction(selector, "Expected 'selector' parameter to zipSeries to be a function.");
-
-		//todo: make this lazy.
-
-		var seriesToZip = E.from(series)
-			.select(function (series) {
-				return series.toValues();
-			})
-			.toArray();
-
-		var length = E.from(seriesToZip).select(function (values) { 
-				return values.length; 
-			})
-			.min();
-
-		var output = [];
-
-		for (var i = 0; i < length; ++i) {
-			var curElements = E.from(seriesToZip)
-				.select(function (values) {
-					return values[i];
-				})
-				.toArray();
-			output.push(selector(curElements));
-		}
-
-		return new Series({
-			index: series[0].getIndex(),
-			values: output,
-		});
-	},
-
-	/*
+	/**
 	 * Zip together multiple data-frames to create a new data-frame.
 	 *
 	 * @param {array} dataFrames - Array of data-frames to zip together.
 	 * @param {function} selector - Selector function that produces a new data-frame based on the input data-frames.
 	 */
-	zipDataFrames: function (dataFrames, selector) {
-
-		assert.isArray(dataFrames, "Expected 'dataFrames' parameter to zipDataFrames to be an array of Series objects.");
-		assert.isFunction(selector, "Expected 'selector' parameter to zipDataFrames to be a function.");
-
-		//todo: make this lazy.
-
-		var dataFrameContents = E.from(dataFrames)
-			.select(function (dataFrame) {
-				return dataFrame.toObjects();
-			})
-			.toArray();
-
-		var length = E.from(dataFrameContents).select(function (objects) { 
-				return objects.length; 
-			})
-			.min();
-
-		var output = [];
-
-		for (var i = 0; i < length; ++i) {
-			var curElements = E.from(dataFrameContents)
-				.select(function (objects) {
-					return objects[i];
-				})
-				.toArray();
-			output.push(selector(curElements));
-		}
-
-		return new DataFrame({
-			index: dataFrames[0].getIndex(),
-			rows: output,
-		});
-	},	
+	zip: require('./src/zip-dataframes'),	
 };
 
 module.exports = dataForge;
-},{"./src/dataframe":45,"./src/index":46,"./src/iterators/array":47,"./src/iterators/concat":48,"./src/iterators/multi":51,"./src/iterators/select":54,"./src/series":61,"./src/utils":62,"babyparse":4,"chai":5,"extend":39,"linq":40,"sugar":42}],3:[function(require,module,exports){
+},{"./src/concat-dataframes":45,"./src/dataframe":46,"./src/index":47,"./src/iterators/multi":52,"./src/iterators/select":55,"./src/merge-dataframes.js":62,"./src/merge-series":63,"./src/series":64,"./src/zip-dataframes":66,"./src/zip-series":67,"babyparse":4,"chai":5,"extend":39,"linq":40,"sugar":42}],3:[function(require,module,exports){
 /*!
  * assertion-error
  * Copyright(c) 2013 Jake Luer <jake@qualiancy.com>
@@ -1678,7 +1287,7 @@ AssertionError.prototype.toJSON = function (stack) {
 
 })(typeof window !== 'undefined' ? window : this);
 
-},{"fs":63}],5:[function(require,module,exports){
+},{"fs":68}],5:[function(require,module,exports){
 module.exports = require('./lib/chai');
 
 },{"./lib/chai":6}],6:[function(require,module,exports){
@@ -7419,7 +7028,7 @@ function objectEqual(a, b, m) {
   return true;
 }
 
-},{"buffer":65,"type-detect":36}],36:[function(require,module,exports){
+},{"buffer":70,"type-detect":36}],36:[function(require,module,exports){
 module.exports = require('./lib/type');
 
 },{"./lib/type":37}],37:[function(require,module,exports){
@@ -24543,12 +24152,52 @@ Library.prototype.test = function(obj, type) {
 },{}],45:[function(require,module,exports){
 'use strict';
 
+var assert = require('chai').assert;
+var E = require('linq');
+var DataFrame = require('./dataframe');
+var ConcatIterator = require('./iterators/concat');
+
+/**
+ * Concatenate multiple data frames into a single.
+ *
+ * @param {array} dataFrames - Array of data frames to concatenate.
+ */
+module.exports = function (dataFrames) {
+	assert.isArray(dataFrames, "Expected 'dataFrames' parameter to 'dataForge.concat' to be an array of data frames.");
+
+	var concatenateColumns = function () {
+		return E.from(dataFrames)
+			.selectMany(function (dataFrame) {
+				return dataFrame.getColumnNames();
+			})
+			.distinct()
+			.toArray();
+	};
+
+	return new DataFrame({
+		columnNames: concatenateColumns(),
+		iterable: function () {
+			var concatenatedColumns = concatenateColumns();
+			var iterators = E.from(dataFrames)
+				.select(function (dataFrame) {
+					return dataFrame.remapColumns(concatenatedColumns);
+				})
+				.select(function (dataFrame) {
+					return dataFrame.getIterator();
+				})						
+				.toArray()
+			return new ConcatIterator(iterators);
+		},
+	});
+};
+
+},{"./dataframe":46,"./iterators/concat":49,"chai":5,"linq":40}],46:[function(require,module,exports){
+'use strict';
+
 // 
 // Base class for data frame classes.
 //
 
-var Series = require('./series');
-var Index = require('./index');
 var ArrayIterator = require('./iterators/array');
 var MultiIterator = require('./iterators/multi');
 var PairIterator = require('./iterators/pair');
@@ -24695,11 +24344,9 @@ var determineColumnNamesFromPairsIterable = function (iterable, considerAllRows)
 	}
 };
 
-/**
- * Constructor for DataFrame.
- *
- * @param {object} config - Specifies content and configuration for the data frame.
- */
+//
+// Constuctor.
+//
 var DataFrame = function (config) {
 
 	var self = this;
@@ -24931,6 +24578,15 @@ var DataFrame = function (config) {
 		}
 	}
 };
+
+module.exports = DataFrame;
+
+var Series = require('./series');
+var Index = require('./index');
+var concatDataFrames = require('./concat-dataframes');
+var zipDataFrames = require('./zip-dataframes');
+var mergeSeries = require('./merge-series');
+var mergeDataFrames = require('./merge-dataframes');
 
 /**
  * Get the index of the data frame.
@@ -25196,8 +24852,19 @@ DataFrame.prototype.selectMany = function (selector) {
 		iterable: function () {
 			return new SelectManyIterator(self.getIterator(), function (pair) {
 				var newRows = selector(pair[1], pair[0]);
-				if (!Object.isArray(newRows)) {
-					throw new Error("Expected return value from 'DataFrame.selectMany' selector to be an array of objects, each object represents a new row in the resulting data-frame.");
+
+				if (!Object.isArray(newRows) &&
+					!(newRows instanceof Series) &&
+					!(newRows instanceof DataFrame)) {
+					throw new Error("Expected return value from 'DataFrame.selectMany' selector to be an array of objects, a Series or a DataFrame, each object represents a new row in the resulting data-frame.");
+				}
+
+				if (newRows instanceof Series)
+				{
+					newRows = newRows.toValues();
+				}
+				else if (newRows instanceof DataFrame) {
+					newRows = newRows.toObjects();
 				}
 
 				var newPairs = [];
@@ -25538,7 +25205,7 @@ DataFrame.prototype.dropSeries = function (columnOrColumns) {
 	var self = this;
 
 	if (!Object.isArray(columnOrColumns)) {
-		assert.isString(columnOrColumns, "'dropSeries' expected either a string or an array or strings.");
+		assert.isString(columnOrColumns, "'DataFrame.dropSeries' expected either a string or an array or strings.");
 
 		columnOrColumns = [columnOrColumns]; // Convert to array for coding convenience.
 	}
@@ -25571,12 +25238,50 @@ DataFrame.prototype.dropSeries = function (columnOrColumns) {
 };
 
 /**
+ * Create a new data frame with only the requested column or columns dropped, other columns are dropped.
+ *
+ * @param {string|array} columnOrColumns - Specifies the column name (a string) or columns (array of column names) to keep.
+ */
+DataFrame.prototype.keepSeries = function (columnOrColumns) {
+
+	var self = this;
+
+	if (!Object.isArray(columnOrColumns)) {
+		assert.isString(columnOrColumns, "'DataFrame.keepSeries' expected either a string or an array or strings.");
+
+		columnOrColumns = [columnOrColumns]; // Convert to array for coding convenience.
+	}
+
+	return new DataFrame({
+		columnNames: function () {
+			return columnOrColumns;
+		},
+		iterable: function () {
+			return new SelectIterator(
+				self.getIterator(),
+				function (pair) {
+					var row = extend({}, pair[1]);
+					Object.keys(row).forEach(function (fieldName) {
+						if (!E.from(columnOrColumns).contains(fieldName)) {
+							delete row[fieldName];
+						}
+					});
+					return [
+						pair[0],
+						row
+					];					
+				}
+			);
+		},
+	});
+};
+/**
  * Create a new data frame with an additional column specified by the passed-in series.
  *
  * @param {string} columnName - The name of the column to add or replace.
  * @param {array|column} data - Array of data or column that contains data.
  */
-DataFrame.prototype.setSeries = function (columnName, data) { //todo
+DataFrame.prototype.setSeries = function (columnName, data) {
 
 	assert.isString(columnName, "Expected 'columnName' parameter to 'setSeries' function to be a string that specifies the column to set or replace.");
 
@@ -25794,55 +25499,87 @@ DataFrame.prototype.toString = function () {
 /**
  * Parse a column with string values to a column with int values.
  *
- * @param {string|int} columnNameOrIndex - Specifies the column to parse.
+ * @param {string|array} columnNameOrNames - Specifies the column name or array of column names to parse.
  */
-DataFrame.prototype.parseInts = function (columnNameOrIndex) {
+DataFrame.prototype.parseInts = function (columnNameOrNames) {
 
 	var self = this;
-	return self.setSeries(columnNameOrIndex, self.getSeries(columnNameOrIndex).parseInts());
+	if (Object.isArray(columnNameOrNames)) {
+		return E.from(columnNameOrNames)
+			.aggregate(self, function (self, columnName) {
+				return self.setSeries(columnName, self.getSeries(columnName).parseInts());
+			});
+	}
+	else {
+		return self.setSeries(columnNameOrNames, self.getSeries(columnNameOrNames).parseInts());
+	}
 };
 
 /**
  * Parse a column with string values to a column with float values.
  *
- * @param {string|int} columnNameOrIndex - Specifies the column to parse.
+ * @param {string|array} columnNameOrNames - Specifies the column name or array of column names to parse.
  */
-DataFrame.prototype.parseFloats = function (columnNameOrIndex) {
+DataFrame.prototype.parseFloats = function (columnNameOrNames) {
 
 	var self = this;
-	return self.setSeries(columnNameOrIndex, self.getSeries(columnNameOrIndex).parseFloats());
+	if (Object.isArray(columnNameOrNames)) {
+		return E.from(columnNameOrNames)
+			.aggregate(self, function (self, columnName) {
+				return self.setSeries(columnName, self.getSeries(columnName).parseFloats());
+			});
+	}
+	else {
+		return self.setSeries(columnNameOrNames, self.getSeries(columnNameOrNames).parseFloats());
+	}
 };
 
 /**
  * Parse a column with string values to a column with date values.
  *
- * @param {string|int} columnNameOrIndex - Specifies the column to parse.
+ * @param {string|array} columnNameOrNames - Specifies the column name or array of column names to parse.
  * @param {string} [formatString] - Optional formatting string for dates.
  */
-DataFrame.prototype.parseDates = function (columnNameOrIndex, formatString) {
+DataFrame.prototype.parseDates = function (columnNameOrNames, formatString) {
 
 	if (formatString) {
 		assert.isString(formatString, "Expected optional 'formatString' parameter to parseDates to be a string (if specified).");
 	}
 
 	var self = this;
-	return self.setSeries(columnNameOrIndex, self.getSeries(columnNameOrIndex).parseDates(formatString));
+	if (Object.isArray(columnNameOrNames)) {
+		return E.from(columnNameOrNames)
+			.aggregate(self, function (self, columnName) {
+				return self.setSeries(columnName, self.getSeries(columnName).parseDates(formatString));
+			});
+	}
+	else {
+		return self.setSeries(columnNameOrNames, self.getSeries(columnNameOrNames).parseDates(formatString));
+	}
 };
 
 /**
  * Convert a column of values of different types to a column of string values.
  *
- * @param {string|int} columnNameOrIndex - Specifies the column to convert.
+ * @param {string|array} columnNameOrNames - Specifies the column name or array of column names to convert to strings.
  * @param {string} [formatString] - Optional formatting string for dates.
  */
-DataFrame.prototype.toStrings = function (columnNameOrIndex, formatString) {
+DataFrame.prototype.toStrings = function (columnNameOrNames, formatString) {
 
 	if (formatString) {
 		assert.isString(formatString, "Expected optional 'formatString' parameter to parseDates to be a string (if specified).");
 	}
 
 	var self = this;
-	return self.setSeries(columnNameOrIndex, self.getSeries(columnNameOrIndex).toStrings(formatString));
+	if (Object.isArray(columnNameOrNames)) {
+		return E.from(columnNameOrNames)
+			.aggregate(self, function (self, columnName) {
+				return self.setSeries(columnName, self.getSeries(columnName).toStrings(formatString));
+			});
+	}
+	else {
+		return self.setSeries(columnNameOrNames, self.getSeries(columnNameOrNames).toStrings(formatString));
+	}
 };
 
 /**
@@ -25869,8 +25606,7 @@ DataFrame.prototype.detectTypes = function () {
 				.setSeries('Column', newSeries);
 		})
 		.toArray();
-	var dataForge = require('../index');
-	return dataForge.concat(dataFrames).resetIndex();
+	return concatDataFrames(dataFrames).resetIndex();
 };
 
 /**
@@ -25894,8 +25630,7 @@ DataFrame.prototype.detectValues = function () {
 			return column.series.detectValues().setSeries('Column', newSeries);
 		})
 		.toArray();
-	var dataForge = require('../index');
-	return dataForge.concat(dataFrames).resetIndex();
+	return concatDataFrames(dataFrames).resetIndex();
 };
 /**
  * Produces a new data frame with all string values truncated to the requested maximum length.
@@ -26437,7 +26172,9 @@ DataFrame.prototype.generateSeries = function (selector) {
 	//todo: this should merge on index.
 	//todo: need to be able to override columns on 1 data frame with columns from another.
 
-	var newColumns = self.select(selector);
+	var newColumns = self.select(selector)
+		.bake()
+		;
 
 	return E.from(newColumns.getColumnNames())
 		.aggregate(self, function (prevDataFrame, newColumnName) {
@@ -26481,8 +26218,6 @@ DataFrame.prototype.deflate = function (selector) {
 DataFrame.prototype.inflateColumn = function (columnNameOrIndex, selector) {
 
 	var self = this;
-	var dataForge = require('../index');
-
 	return self.zip(
 		self.getSeries(columnNameOrIndex).inflate(selector),
 		function (row1, row2) {
@@ -26604,8 +26339,7 @@ DataFrame.prototype.zip = function () {
 
 	assert.isFunction(selector, "Expect 'selector' parameter to zip to be a function.");
 
-	var dataForge = require('../index.js');
-	return dataForge.zipDataFrames(dataFrames, function (rows) {
+	return zipDataFrames(dataFrames, function (rows) {
 			return selector.apply(undefined, rows);
 		});
 };
@@ -26742,9 +26476,9 @@ DataFrame.prototype.groupBy = function (selector) {
  *
  * @param {function} valueSelector - Selects the value used to compare for duplicates.
  */	
-DataFrame.prototype.groupSequential = function (valueSelector) {
+DataFrame.prototype.groupSequentialBy = function (valueSelector) {
 
-	assert.isFunction(valueSelector, "Expected 'valueSelector' parameter to 'sequentialDistinct' to be a function.")
+	assert.isFunction(valueSelector, "Expected 'valueSelector' parameter to 'DataFrame.groupSequentialBy' to be a function.")
 
 	var self = this;
 
@@ -27036,8 +26770,7 @@ DataFrame.prototype.pivot = function (column, value) {
 		})
 		.toArray();
 
-	var dataForge = require('../index');
-	return dataForge.mergeSeries(newColumnNames, newSeries);
+	return mergeSeries(newColumnNames, newSeries);
 };
 
 /**
@@ -27053,8 +26786,7 @@ DataFrame.prototype.merge = function (otherDataFrame, columnName) {
 	}
 
 	var self = this;
-	var dataForge = require('../index');
-	return dataForge.merge(self, otherDataFrame, columnName);
+	return mergeDataFrames(self, otherDataFrame, columnName);
 };
 
 /**
@@ -27062,9 +26794,9 @@ DataFrame.prototype.merge = function (otherDataFrame, columnName) {
  *
  * @param {pair} pair - The pair to insert.
  */
-DataFrame.prototype.insert = function (pair) {
-	assert.isArray(pair, "Expected 'pair' parameter to 'DataFrame.insert' to be an array.");
-	assert(pair.length === 2, "Expected 'pair' parameter to 'DataFrame.insert' to be an array with two elements. The first element is the index, the second is the row.");
+DataFrame.prototype.insertPair = function (pair) {
+	assert.isArray(pair, "Expected 'pair' parameter to 'DataFrame.insertPair' to be an array.");
+	assert(pair.length === 2, "Expected 'pair' parameter to 'DataFrame.insertPair' to be an array with two elements. The first element is the index, the second is the row.");
 
 	//todo: make this lazy.
 
@@ -27082,9 +26814,9 @@ DataFrame.prototype.insert = function (pair) {
  *
  * @param {pair} pair - The pair to append.
  */
-DataFrame.prototype.append = function (pair) {
-	assert.isArray(pair, "Expected 'pair' parameter to 'DataFrame.append' to be an array.");
-	assert(pair.length === 2, "Expected 'pair' parameter to 'DataFrame.append' to be an array with two elements. The first element is the index, the second is the row.");
+DataFrame.prototype.appendPair = function (pair) {
+	assert.isArray(pair, "Expected 'pair' parameter to 'DataFrame.appendPair' to be an array.");
+	assert(pair.length === 2, "Expected 'pair' parameter to 'DataFrame.appendPair' to be an array with two elements. The first element is the index, the second is the row.");
 
 	//todo: make this lazy.
 
@@ -27124,7 +26856,7 @@ DataFrame.prototype.fillGaps = function (predicate, generator) {
 			return [pairA].concat(generatedRows);
 		})
 		.inflate()
-		.append(self.lastPair())
+		.appendPair(self.lastPair())
 		;
 };
 
@@ -27182,8 +26914,7 @@ DataFrame.prototype.concat = function (otherDataFrame) {
 	})
 };
 
-module.exports = DataFrame;
-},{"../index":2,"../index.js":2,"../src/iterators/count":49,"../src/iterators/empty":50,"../src/iterators/select":54,"../src/iterators/select-many":53,"../src/iterators/take":58,"../src/iterators/take-while":57,"../src/iterators/where":60,"./index":46,"./iterators/array":47,"./iterators/multi":51,"./iterators/pair":52,"./iterators/skip":56,"./iterators/skip-while":55,"./iterators/validate":59,"./series":61,"./utils":62,"babyparse":4,"chai":5,"easy-table":38,"extend":39,"linq":40}],46:[function(require,module,exports){
+},{"../src/iterators/count":50,"../src/iterators/empty":51,"../src/iterators/select":55,"../src/iterators/select-many":54,"../src/iterators/take":59,"../src/iterators/take-while":58,"../src/iterators/where":61,"./concat-dataframes":45,"./index":47,"./iterators/array":48,"./iterators/multi":52,"./iterators/pair":53,"./iterators/skip":57,"./iterators/skip-while":56,"./iterators/validate":60,"./merge-dataframes":62,"./merge-series":63,"./series":64,"./utils":65,"./zip-dataframes":66,"babyparse":4,"chai":5,"easy-table":38,"extend":39,"linq":40}],47:[function(require,module,exports){
 'use strict';
 
 var ArrayIterator = require('./iterators/array');
@@ -27197,9 +26928,9 @@ var E = require('linq');
 
 var validateIterator = require('./iterators/validate');
 
-/**
- * Implements an index for a data frame or column.
- */
+//
+// Implements an index for a data frame or column.
+//
 var Index = function (values) {
 
 	var self = this;
@@ -27218,6 +26949,8 @@ var Index = function (values) {
 	assert.isFunction(self._iterable);
 };
 
+module.exports = Index;
+
 /**
  * Get an iterator to iterate the values of the index.
  */
@@ -27233,8 +26966,6 @@ Index.prototype.getIterator = function () {
  */
 Index.prototype.skip = function (numRows) {
 	assert.isNumber(numRows, "Expected 'numRows' parameter to 'skip' function to be a number.");	
-
-	var Index = require('./index');
 
 	var self = this;
 	return new Index(function () {
@@ -27421,8 +27152,8 @@ Index.prototype.tail = function (values) {
 	return self.skip(self.count() - values);
 };
 
-module.exports = Index;
-},{"../src/iterators/take":58,"../src/iterators/take-while":57,"./index":46,"./iterators/array":47,"./iterators/skip":56,"./iterators/skip-while":55,"./iterators/validate":59,"chai":5,"linq":40}],47:[function(require,module,exports){
+
+},{"../src/iterators/take":59,"../src/iterators/take-while":58,"./iterators/array":48,"./iterators/skip":57,"./iterators/skip-while":56,"./iterators/validate":60,"chai":5,"linq":40}],48:[function(require,module,exports){
 'use strict';
 
 //
@@ -27468,7 +27199,7 @@ var ArrayIterator = function (arr) {
 };
 
 module.exports = ArrayIterator;
-},{}],48:[function(require,module,exports){
+},{}],49:[function(require,module,exports){
 'use strict';
 
 var E = require('linq');
@@ -27517,7 +27248,7 @@ var MultiIterator = function (iterators) {
 };
 
 module.exports = MultiIterator;
-},{"linq":40}],49:[function(require,module,exports){
+},{"linq":40}],50:[function(require,module,exports){
 'use strict';
 
 var CountIterator = function () {
@@ -27543,7 +27274,7 @@ var CountIterator = function () {
 };
 
 module.exports = CountIterator;
-},{}],50:[function(require,module,exports){
+},{}],51:[function(require,module,exports){
 'use strict';
 
 /*
@@ -27565,7 +27296,7 @@ var EmptyIterator = function () {
 };
 
 module.exports = EmptyIterator;
-},{}],51:[function(require,module,exports){
+},{}],52:[function(require,module,exports){
 'use strict';
 
 var E = require('linq');
@@ -27626,7 +27357,7 @@ var MultiIterator = function (iterators) {
 };
 
 module.exports = MultiIterator;
-},{"linq":40}],52:[function(require,module,exports){
+},{"linq":40}],53:[function(require,module,exports){
 'use strict';
 
 var E = require('linq');
@@ -27679,7 +27410,7 @@ var PairIterator = function (it1, it2) {
 };
 
 module.exports = PairIterator;
-},{"linq":40}],53:[function(require,module,exports){
+},{"linq":40}],54:[function(require,module,exports){
 'use strict';
 
 var E = require('linq');
@@ -27748,7 +27479,7 @@ var SelectManyIterator = function (iterator, selector) {
 };
 
 module.exports = SelectManyIterator;
-},{"./array":47,"./select":54,"linq":40}],54:[function(require,module,exports){
+},{"./array":48,"./select":55,"linq":40}],55:[function(require,module,exports){
 'use strict';
 
 var E = require('linq');
@@ -27786,7 +27517,7 @@ var SelectIterator = function (iterator, selector) {
 };
 
 module.exports = SelectIterator;
-},{"linq":40}],55:[function(require,module,exports){
+},{"linq":40}],56:[function(require,module,exports){
 'use strict';
 
 //
@@ -27823,7 +27554,7 @@ var SkipWhileIterator = function (iterator, predicate) {
 };
 
 module.exports = SkipWhileIterator;
-},{}],56:[function(require,module,exports){
+},{}],57:[function(require,module,exports){
 'use strict';
 
 //
@@ -27847,7 +27578,7 @@ var SkipIterator = function (iterator, skipAmount) {
 };
 
 module.exports = SkipIterator;
-},{}],57:[function(require,module,exports){
+},{}],58:[function(require,module,exports){
 'use strict';
 
 //
@@ -27882,7 +27613,7 @@ var TakeWhileIterator = function (iterator, predicate) {
 };
 
 module.exports = TakeWhileIterator;
-},{}],58:[function(require,module,exports){
+},{}],59:[function(require,module,exports){
 'use strict';
 
 //
@@ -27906,7 +27637,7 @@ var TakeIterator = function (iterator, takeAmount) {
 };
 
 module.exports = TakeIterator;
-},{}],59:[function(require,module,exports){
+},{}],60:[function(require,module,exports){
 'use strict';
 
 var assert = require('chai').assert;
@@ -27919,7 +27650,7 @@ module.exports = function (iterator) {
 	assert.isFunction(iterator.moveNext, "Expected iterator to have function 'moveNext'.");
 	assert.isFunction(iterator.getCurrent, "Expected iterator to have function 'getCurrent'.");
 };
-},{"chai":5}],60:[function(require,module,exports){
+},{"chai":5}],61:[function(require,module,exports){
 'use strict';
 
 //
@@ -27962,7 +27693,348 @@ var WhereIterator = function (iterator, predicate) {
 };
 
 module.exports = WhereIterator;
-},{}],61:[function(require,module,exports){
+},{}],62:[function(require,module,exports){
+var assert = require('chai').assert;
+var E = require('linq');
+var DataFrame = require('./dataframe');
+var dropElement = require('./utils').dropElement;
+var ArrayIterator = require('./iterators/array');
+
+//
+// Helper function to replicate a value.
+//
+var replicate = function (value, count) {
+	var output = [];
+	for (var i = 0; i < count; ++i) {
+		output.push(value);
+	}
+	return output;
+};
+
+//
+// Convert an object row to an array.
+// todo: Feels like a bit of a hack to use this.
+//
+var toRow = function (row, columnNames) {
+	return E.from(columnNames)
+		.select(function (columnName) {
+			return row[columnName];
+		})
+		.toArray();
+};
+
+/**
+ * Merge data-frames by index or a particular column.
+ * 
+ * @param {DataFrame} leftDataFrame - One data frame to merge.
+ * @param {DataFrame} rightDataFrame - The other data frame to merge.
+ * @param {string} [columnName] - The name of the column to merge on. Optional, when not specified merge is based on the index.
+ */
+module.exports = function (leftDataFrame, rightDataFrame, columnName) {
+
+	//todo: refactor and DRY the two code paths here.
+	//todo: this probably just needs a rewrite so that multiple dataframes can be merged.
+
+	assert.isObject(leftDataFrame, "Expected 'leftDataFrame' parameter to 'merge' to be an object.");
+	assert.isObject(rightDataFrame, "Expected 'rightDataFrame' parameter to 'merge' to be an object.");
+
+	if (columnName) {
+		assert.isString(columnName, "Expected optional 'columnName' parameter to 'merge' to be a string.");
+
+		var leftColumnIndex = leftDataFrame.getColumnIndex(columnName);
+		if (leftColumnIndex < 0) {
+			throw new Error("Column with name '" + columnName + "' doesn't exist in 'leftDataFrame'.");
+		}
+
+		var rightColumnIndex = rightDataFrame.getColumnIndex(columnName);
+		if (rightColumnIndex < 0) {
+			throw new Error("Column with name '" + columnName + "' doesn't exist in 'rightColumnIndex'.");
+		}
+
+		var leftPairs = leftDataFrame.toPairs();
+		var rightPairs = rightDataFrame.toPairs();
+
+		var mergedColumnNames = [columnName]
+			.concat(dropElement(leftDataFrame.getColumnNames(), leftColumnIndex))
+			.concat(dropElement(rightDataFrame.getColumnNames(), rightColumnIndex));
+
+		var leftColumns = leftDataFrame.getColumnNames();
+		var rightColumns = rightDataFrame.getColumnNames();
+
+		var leftIndices = E.from(leftPairs)
+			.select(function (leftPair) {
+				return leftPair[1][leftColumns[leftColumnIndex]];
+			})
+			.toArray();
+		var rightIndices = E.from(rightPairs)
+			.select(function (rightPair) {
+				return rightPair[1][rightColumns[rightColumnIndex]];
+			})
+			.toArray();
+
+		var distinctIndices = E.from(leftIndices.concat(rightIndices)).distinct().toArray();
+
+		var leftMap = E.from(leftPairs)
+			.groupBy(function (leftPair) {
+				return leftPair[1][leftColumns[leftColumnIndex]];
+			})
+			.toObject(
+				function (group) {
+					return group.key();
+				},
+				function (group) {
+					return group.getSource();
+				}
+			);
+
+		var rightMap = E.from(rightPairs)
+			.groupBy(function (rightPair) {
+				return rightPair[1][rightColumns[rightColumnIndex]];
+			})
+			.toObject(
+				function (group) {
+					return group.key();
+				},
+				function (group) {
+					return group.getSource();
+				}
+			);
+
+		var outputIndices = [];
+
+		var mergedValues = E.from(distinctIndices) // Merge values, drop index.
+			.selectMany(function (index) {
+				var leftPairs = leftMap[index] || [];
+				var rightPairs = rightMap[index] || [];
+				var outputRows = [];
+
+				if (leftPairs.length > 0) {
+					leftPairs.forEach(function (leftPair) {
+						assert.isArray(leftPair);
+
+						if (rightPairs.length > 0) {
+							
+							rightPairs.forEach(function (rightPair) {
+								assert.isArray(rightPair);
+
+								var leftValues = dropElement(toRow(leftPair[1], leftColumns), leftColumnIndex);
+								var rightValues = dropElement(toRow(rightPair[1], rightColumns), rightColumnIndex);
+								var outputRow = [index]
+									.concat(leftValues)
+									.concat(rightValues)
+									;
+
+								outputIndices.push(leftPair[0]);
+								outputRows.push(outputRow);
+							});
+						}
+						else {
+							var leftValues = dropElement(toRow(leftPair[1], leftColumns), leftColumnIndex);
+							var rightValues = replicate(undefined, rightColumns.length-1);
+							var outputRow = [index]
+								.concat(leftValues)
+								.concat(rightValues)
+								;
+
+							outputIndices.push(leftPair[0]);
+							outputRows.push(outputRow);
+						}
+					});						
+				}
+				else {
+					rightPairs.forEach(function (rightPair) {
+						assert.isArray(rightPair);
+
+						var leftValues = replicate(undefined, leftColumns.length-1);
+						var rightValues = dropElement(toRow(rightPair[1], rightColumns), rightColumnIndex);
+						var outputRow = [index]
+							.concat(leftValues)
+							.concat(rightValues)
+							;
+						
+						outputIndices.push(rightPair[0]);
+						outputRows.push(outputRow);
+					});
+				}
+
+				return outputRows;
+			})
+			.toArray();
+
+		return new DataFrame({
+			columnNames: mergedColumnNames,
+			rows: function () {
+				return new ArrayIterator(mergedValues);
+			},
+			index: outputIndices,
+		});			
+	}
+	else {
+		var leftPairs = leftDataFrame.toPairs();
+		var rightPairs = rightDataFrame.toPairs();
+
+		var leftColumns = leftDataFrame.getColumnNames();
+		var rightColumns = rightDataFrame.getColumnNames();
+		var mergedColumnNames = leftColumns.concat(rightColumns);
+
+		var leftIndices = leftDataFrame.getIndex().toValues();
+		var rightIndices = rightDataFrame.getIndex().toValues();
+		var distinctIndices = E.from(leftIndices.concat(rightIndices)).distinct().toArray();
+
+		var leftMap = E.from(leftPairs)
+			.groupBy(function (leftPair) {
+				return leftPair[0];
+			})
+			.toObject(
+				function (group) {
+					return group.key();
+				},
+				function (group) {
+					return group.getSource();
+				}
+			);
+
+		var rightMap = E.from(rightPairs)
+			.groupBy(function (rightPair) {
+				return rightPair[0];
+			})
+			.toObject(
+				function (group) {
+					return group.key();
+				},
+				function (group) {
+					return group.getSource();
+				}
+			);
+
+		var outputIndices = [];
+
+		var mergedValues = E.from(distinctIndices) 
+			.selectMany(function (index) {
+				var leftPairs = leftMap[index] || [];
+				var rightPairs = rightMap[index] || [];
+				var outputRows = [];
+
+				if (leftPairs.length > 0) {
+					leftPairs.forEach(function (leftPair) {
+						assert.isArray(leftPair);
+
+						if (rightPairs.length > 0) {
+							
+							rightPairs.forEach(function (rightPair) {
+								assert.isArray(rightPair);
+
+								outputIndices.push(index);
+
+								var outputRow = [];
+
+								leftColumns.forEach(function (leftColumnName) {
+									outputRow.push(leftPair[1][leftColumnName]);
+								});
+
+								rightColumns.forEach(function (rightColumnName) {
+									outputRow.push(rightPair[1][rightColumnName]);
+								});
+
+								outputRows.push(outputRow);
+							});
+						}
+						else {
+							outputIndices.push(index);
+
+							var outputRow = [];
+
+							leftColumns.forEach(function (leftColumnName) {
+								outputRow.push(leftPair[1][leftColumnName]);
+							});
+
+							for (var i = 0; i < rightColumns.length; ++i) {
+								outputRow.push(undefined);
+							}
+
+							outputRows.push(outputRow);
+						}
+					});
+				}
+				else {
+					rightPairs.forEach(function (rightPair) {
+						assert.isArray(rightPair);
+
+						outputIndices.push(index);
+
+						var outputRow = [];
+
+						for (var i = 0; i < leftColumns.length; ++i) {
+							outputRow.push(undefined);
+						}
+
+						rightColumns.forEach(function (rightColumnName) {
+							outputRow.push(rightPair[1][rightColumnName]);
+						});
+
+						outputRows.push(outputRow);
+					});
+				}
+
+				return outputRows;
+			})
+			.toArray();
+
+		return new DataFrame({
+			columnNames: mergedColumnNames,
+			rows: function () {
+				return new ArrayIterator(mergedValues);
+			},
+			index: outputIndices,
+		});			
+	}
+
+};
+},{"./dataframe":46,"./iterators/array":48,"./utils":65,"chai":5,"linq":40}],63:[function(require,module,exports){
+'use strict';
+
+var assert = require('chai').assert;
+var E = require('linq');
+var Series = require('./series.js');
+
+/**
+ * Merge multiple series into a new DataFrame.
+ * 
+ * @param {array} columnNames - Array of strings that defines the column names for the resulting DataFrame. Must have the same number of elements as the 'series' parameter.
+ * @param {array} series - Array of series that defined the values for the columns. Must have the same number of elements as the 'columnNames' parameter.
+ */
+module.exports = function (columnNames, series) {
+	assert.isArray(columnNames, "Expected 'columnNames' parameter of dataForge.mergeSeries to be an array of strings that specify column names in the resulting DataFrame.");
+	assert.isArray(series, "Expected 'series' parameter of dataForge.mergeSeries to be an array of Series objects that specify the values for the columns in the resulting DataFrame.");
+
+	columnNames.forEach(function (columnName) {
+		//todo: specify bad index.
+		assert.isString(columnName, "Expected 'columnNames' parameter of dataForge.mergeSeries to be an array of strings that specify column names in the resulting DataFrame.");
+	});
+
+	series.forEach(function (series) {
+		//todo: specify bad index.
+		assert.instanceOf(series, Series, "Expected 'series' parameter of dataForge.mergeSeries to be an array of Series objects that specify the values for the columns in the resulting DataFrame.");
+	});
+
+	assert(columnNames.length === series.length, "Expect 'columnNames' and 'series' parameters to dataForge.mergeSeries to be arrays with the same length. columnNames has length " + columnNames.length + ", series has length " + series.length);
+
+	var distinctColumnNames = E.from(columnNames).distinct().toArray();
+	assert(distinctColumnNames.length === columnNames.length, "Only distinct column names are allowed, please remove duplicates from: " + columnNames.join(', ') + ".");
+
+	return E.from(columnNames)
+		.zip(series, function (columnName, series) {
+			return series.inflate(function (value) {
+				var output = {};
+				output[columnName] = value;
+				return output;
+			});
+		})
+		.aggregate(function (mergedDataFrame, toMerge) { //todo: just call the function that will merge multiple DFs
+			return mergedDataFrame.merge(toMerge);
+		});
+};
+},{"./series.js":64,"chai":5,"linq":40}],64:[function(require,module,exports){
 'use strict';
 
 // 
@@ -27974,7 +28046,6 @@ var E = require('linq');
 var moment = require('moment');
 var ArrayIterator = require('./iterators/array');
 var validateIterator = require('./iterators/validate');
-var Index = require('./index');
 var SkipIterator = require('./iterators/skip');
 var SkipWhileIterator = require('./iterators/skip-while');
 var TakeIterator = require('../src/iterators/take');
@@ -27986,9 +28057,9 @@ var WhereIterator = require('../src/iterators/where');
 var CountIterator = require('../src/iterators/count');
 var EmptyIterator = require('../src/iterators/empty');
 
-/**
- * Represents a time series.
- */
+//
+// Represents a time series.
+//
 var Series = function (config) {
 
 	var self = this;
@@ -28062,6 +28133,13 @@ var Series = function (config) {
 		}
 	}
 };
+
+module.exports = Series;
+
+var Index = require('./index');
+var DataFrame = require('./dataframe');
+var zipSeries = require('./zip-series');
+
 
 /**
  * Get an iterator for the iterating the values of the series.
@@ -28264,8 +28342,18 @@ Series.prototype.selectMany = function (selector) {
 			return new SelectManyIterator(self.getIterator(), 
 				function (pair) {
 					var newValues = selector(pair[1], pair[0]);
-					if (!Object.isArray(newValues)) {
-						throw new Error("Expected return value from 'Series.selectMany' selector to be an array, each item in the array represents a new value in the resulting series.");
+					if (!Object.isArray(newValues) &&
+						!(newValues instanceof Series) &&
+						!(newValues instanceof DataFrame)) {
+						throw new Error("Expected return value from 'Series.selectMany' selector to be an array, a Series or a DataFrame, each item in the data sequence represents a new value in the resulting series.");
+					}
+
+					if (newValues instanceof Series)
+					{
+						newValues = newValues.toValues();
+					}
+					else if (newValues instanceof DataFrame) {
+						newValues = newValues.toObjects();
 					}
 
 					var newPairs = [];
@@ -28807,7 +28895,6 @@ Series.prototype.detectTypes = function () {
 
 	var self = this;
 
-	var DataFrame = require('./dataframe');
 	return new DataFrame({
 		columnNames: ["Type", "Frequency"],
 		rows: function () { //todo: make this properly lazy.
@@ -28858,7 +28945,6 @@ Series.prototype.detectValues = function () {
 
 	var self = this;
 
-	var DataFrame = require('./dataframe');
 	return new DataFrame({
 		columnNames: ["Value", "Frequency"],
 		rows: function () {
@@ -29122,7 +29208,6 @@ Series.prototype.inflate = function (selector) {
 		}
 	}
 
-	var DataFrame = require('./dataframe');
 	return new DataFrame({
 		iterable: function () {
 			return self.select(selector).getIterator();
@@ -29179,7 +29264,13 @@ Series.prototype.sum = function () {
 Series.prototype.average = function () {
 
 	var self = this;
-	return self.sum() / self.count();
+	var count = self.count();
+	if (count > 0) {
+		return self.sum() / count;
+	}
+	else {
+		return 0;
+	}
 };
 
 /**
@@ -29277,8 +29368,7 @@ Series.prototype.zip = function () {
 
 	assert.isFunction(selector, "Expect 'selector' parameter to zip to be a function.");
 
-	var dataForge = require('../index.js');
-	return dataForge.zipSeries(inputSeries, function (values) {
+	return zipSeries(inputSeries, function (values) {
 			return selector.apply(undefined, values);
 		});
 };
@@ -29369,6 +29459,7 @@ Series.prototype.any = function (predicate) {
  * @param {function} [predicate] - Optional predicate function that receives each value in turn and returns truthy for a match, otherwise falsy.
  */
 Series.prototype.none = function (predicate) {
+
 	if (predicate) {
 		assert.isFunction(predicate, "Expected 'predicate' parameter to 'none' to be a function.")
 	}
@@ -29393,15 +29484,24 @@ Series.prototype.none = function (predicate) {
 
 /**
  * Group sequential duplicate values into a Series of windows.
+ *
+ * @param {function} selector - Selects the value used to compare for duplicates.
  */
-Series.prototype.sequentialDistinct = function (obsoleteSelector) {
+Series.prototype.sequentialDistinct = function (selector) {
 	
-	assert(!obsoleteSelector, "Selector parameter is obsolete and no longer required.");
+	if (selector) {
+		assert.isFunction(selector, "Expected 'selector' parameter to 'Series.sequentialDistinct' to be a selector function that determines the value to compare for duplicates.")
+	}
+	else {
+		selector = function (value) {
+			return value;
+		};
+	}
 
 	var self = this;
 
 	return self.variableWindow(function (a, b) {
-			return a === b;
+			return selector(a) === selector(b);
 		})
 		.selectPairs(function (window) {
 			return [window.getIndex().first(), window.first()];
@@ -29410,10 +29510,19 @@ Series.prototype.sequentialDistinct = function (obsoleteSelector) {
 
 /**
  * Group distinct values in the Series into a Series of windows.
+ *
+ * @param {function} selector - Selects the value used to compare for duplicates.
  */
-Series.prototype.distinct = function (obsoleteSelector) {
+Series.prototype.distinct = function (selector) {
 	
-	assert(!obsoleteSelector, "Selector parameter is obsolete and no longer required.");
+	if (selector) {
+		assert.isFunction(selector, "Expected 'selector' parameter to 'Series.distinct' to be a selector function that determines the value to compare for duplicates.")
+	}
+	else {
+		selector = function (value) {
+			return value;
+		};
+	}
 
 	var self = this;
 
@@ -29453,7 +29562,7 @@ Series.prototype.distinct = function (obsoleteSelector) {
 				continue;
 			}
 
-			if (underComparison.pair[1] === underConsideration.pair[1]) {
+			if (selector(underComparison.pair[1]) === selector(underConsideration.pair[1])) {
 				underComparison.considered = true;
 			}
 		}
@@ -29539,9 +29648,9 @@ Series.prototype.variableWindow = function (comparer, obsoleteSelector) {
  *
  * @param {pair} pair - The pair to insert.
  */
-Series.prototype.insert = function (pair) {
-	assert.isArray(pair, "Expected 'pair' parameter to 'Series.insert' to be an array.");
-	assert(pair.length === 2, "Expected 'pair' parameter to 'Series.insert' to be an array with two elements. The first element is the index, the second is the value.");
+Series.prototype.insertPair = function (pair) {
+	assert.isArray(pair, "Expected 'pair' parameter to 'Series.insertPair' to be an array.");
+	assert(pair.length === 2, "Expected 'pair' parameter to 'Series.insertPair' to be an array with two elements. The first element is the index, the second is the value.");
 
 	//todo: make this lazy.
 
@@ -29559,9 +29668,9 @@ Series.prototype.insert = function (pair) {
  *
  * @param {pair} pair - The pair to append.
  */
-Series.prototype.append = function (pair) {
-	assert.isArray(pair, "Expected 'pair' parameter to 'Series.append' to be an array.");
-	assert(pair.length === 2, "Expected 'pair' parameter to 'Series.append' to be an array with two elements. The first element is the index, the second is the value.");
+Series.prototype.appendPair = function (pair) {
+	assert.isArray(pair, "Expected 'pair' parameter to 'Series.appendPair' to be an array.");
+	assert(pair.length === 2, "Expected 'pair' parameter to 'Series.appendPair' to be an array with two elements. The first element is the index, the second is the value.");
 
 	//todo: make this lazy.
 
@@ -29601,7 +29710,7 @@ Series.prototype.fillGaps = function (predicate, generator) {
 
 			return [pairA].concat(generatedRows);
 		})
-		.append(self.lastPair())
+		.appendPair(self.lastPair())
 		;
 };
 
@@ -29642,13 +29751,24 @@ Series.prototype.groupBy = function (selector) {
 
 /**
  * Group sequential duplicate values into a Series of windows.
+ *
+ * @param {function} selector - Selector that defines the value to group by.
  */
-Series.prototype.groupSequential = function () {
+Series.prototype.groupSequentialBy = function (selector) {
+
+	if (selector) {
+		assert.isFunction(selector, "Expected 'selector' parameter to 'Series.groupSequentialBy' to be a selector function that determines the value to group the series by.")
+	}
+	else {
+		selector = function (value) {
+			return value;
+		};
+	}
 	
 	var self = this;
 
 	return self.variableWindow(function (a, b) {
-			return a === b;
+			return selector(a) === selector(b);
 		});
 };
 
@@ -29704,9 +29824,9 @@ Series.prototype.concat = function (otherSeries) {
 	})
 };
 
-module.exports = Series;
 
-},{"../index.js":2,"../src/iterators/count":49,"../src/iterators/empty":50,"../src/iterators/pair":52,"../src/iterators/select":54,"../src/iterators/select-many":53,"../src/iterators/take":58,"../src/iterators/take-while":57,"../src/iterators/where":60,"./dataframe":45,"./index":46,"./iterators/array":47,"./iterators/skip":56,"./iterators/skip-while":55,"./iterators/validate":59,"chai":5,"easy-table":38,"linq":40,"moment":41}],62:[function(require,module,exports){
+
+},{"../src/iterators/count":50,"../src/iterators/empty":51,"../src/iterators/pair":53,"../src/iterators/select":55,"../src/iterators/select-many":54,"../src/iterators/take":59,"../src/iterators/take-while":58,"../src/iterators/where":61,"./dataframe":46,"./index":47,"./iterators/array":48,"./iterators/skip":57,"./iterators/skip-while":56,"./iterators/validate":60,"./zip-series":67,"chai":5,"easy-table":38,"linq":40,"moment":41}],65:[function(require,module,exports){
 'use strict';
 
 var E = require('linq');
@@ -29724,9 +29844,104 @@ module.exports = {
 	},
 
 };
-},{"linq":40}],63:[function(require,module,exports){
+},{"linq":40}],66:[function(require,module,exports){
+'use strict';
 
-},{}],64:[function(require,module,exports){
+var assert = require('chai').assert;
+var E = require('linq');
+var DataFrame = require('./dataframe');
+
+/*
+ * Zip together multiple data-frames to create a new data-frame.
+ *
+ * @param {array} dataFrames - Array of data-frames to zip together.
+ * @param {function} selector - Selector function that produces a new data-frame based on the input data-frames.
+ */
+module.exports = function (dataFrames, selector) {
+
+	assert.isArray(dataFrames, "Expected 'dataFrames' parameter to zipDataFrames to be an array of Series objects.");
+	assert.isFunction(selector, "Expected 'selector' parameter to zipDataFrames to be a function.");
+
+	//todo: make this lazy.
+
+	var dataFrameContents = E.from(dataFrames)
+		.select(function (dataFrame) {
+			return dataFrame.toObjects();
+		})
+		.toArray();
+
+	var length = E.from(dataFrameContents).select(function (objects) { 
+			return objects.length; 
+		})
+		.min();
+
+	var output = [];
+
+	for (var i = 0; i < length; ++i) {
+		var curElements = E.from(dataFrameContents)
+			.select(function (objects) {
+				return objects[i];
+			})
+			.toArray();
+		output.push(selector(curElements));
+	}
+
+	return new DataFrame({
+		index: dataFrames[0].getIndex(),
+		rows: output,
+	});
+};
+},{"./dataframe":46,"chai":5,"linq":40}],67:[function(require,module,exports){
+'use strict';
+
+var assert = require('chai').assert;
+var E = require('linq');
+var Series = require('./series.js');
+
+/*
+ * Zip together multiple series to create a new series.
+ *
+ * @param {array} series - Array of series to zip together.
+ * @param {function} selector - Selector function that produces a new series based on the input series.
+ */
+module.exports = function (series, selector) {
+
+	assert.isArray(series, "Expected 'series' parameter to zipSeries to be an array of Series objects.");
+	assert.isFunction(selector, "Expected 'selector' parameter to zipSeries to be a function.");
+
+	//todo: make this lazy.
+
+	var seriesToZip = E.from(series)
+		.select(function (series) {
+			return series.toValues();
+		})
+		.toArray();
+
+	var length = E.from(seriesToZip).select(function (values) { 
+			return values.length; 
+		})
+		.min();
+
+	var output = [];
+
+	for (var i = 0; i < length; ++i) {
+		var curElements = E.from(seriesToZip)
+			.select(function (values) {
+				return values[i];
+			})
+			.toArray();
+		output.push(selector(curElements));
+	}
+
+	return new Series({
+		index: series[0].getIndex(),
+		values: output,
+	});
+};
+
+},{"./series.js":64,"chai":5,"linq":40}],68:[function(require,module,exports){
+
+},{}],69:[function(require,module,exports){
 ;(function (exports) {
   'use strict'
 
@@ -29859,7 +30074,7 @@ module.exports = {
   exports.fromByteArray = uint8ToBase64
 }(typeof exports === 'undefined' ? (this.base64js = {}) : exports))
 
-},{}],65:[function(require,module,exports){
+},{}],70:[function(require,module,exports){
 (function (global){
 /*!
  * The buffer module from node.js, for the browser.
@@ -31325,14 +31540,14 @@ function blitBuffer (src, dst, offset, length) {
 }
 
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"base64-js":64,"ieee754":67,"isarray":66}],66:[function(require,module,exports){
+},{"base64-js":69,"ieee754":72,"isarray":71}],71:[function(require,module,exports){
 var toString = {}.toString;
 
 module.exports = Array.isArray || function (arr) {
   return toString.call(arr) == '[object Array]';
 };
 
-},{}],67:[function(require,module,exports){
+},{}],72:[function(require,module,exports){
 exports.read = function (buffer, offset, isLE, mLen, nBytes) {
   var e, m
   var eLen = nBytes * 8 - mLen - 1
