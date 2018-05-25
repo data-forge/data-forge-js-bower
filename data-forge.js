@@ -14589,12 +14589,12 @@ var DataFrame = /** @class */ (function () {
      * This effiectively a short-hand for multiple grouping operations and an aggregation.
      *
      * @param columnOrColumns - Column name whose values make the new DataFrame's columns.
-     * @param valueColumnName - Column name whose values populate the new DataFrame's values.
-     * @param aggregator - Function used to aggregate pivotted vales.
+     * @param valueColumnNameOrSpec - Column name or column spec that defines the columns whose values should be aggregated.
+     * @param [aggregator] - Optional function used to aggregate pivotted vales.
      *
      * @returns Returns a new dataframe that has been pivoted based on a particular column's values.
      */
-    DataFrame.prototype.pivot = function (columnOrColumns, valueColumnName, aggregator) {
+    DataFrame.prototype.pivot = function (columnOrColumns, valueColumnNameOrSpec, aggregator) {
         var columnNames;
         if (Sugar.Object.isString(columnOrColumns)) {
             columnNames = [columnOrColumns];
@@ -14617,8 +14617,19 @@ var DataFrame = /** @class */ (function () {
                 finally { if (e_53) throw e_53.error; }
             }
         }
-        chai_1.assert.isString(valueColumnName, "Expected 'value' parameter to 'DataFrame.pivot' to be a string that identifies the column whose values make the new DataFrame's values.");
-        chai_1.assert.isFunction(aggregator, "Expected 'aggregator' parameter to 'DataFrame.pivot' to be a function to aggegrate pivoted values.");
+        var aggSpec;
+        if (!Sugar.Object.isObject(valueColumnNameOrSpec)) {
+            chai_1.assert.isString(valueColumnNameOrSpec, "Expected 'value' parameter to 'DataFrame.pivot' to be a string that identifies the column whose values to aggregate or a column spec that defines which column contains the value ot aggregate and the ways to aggregate that value.");
+            chai_1.assert.isFunction(aggregator, "Expected 'aggregator' parameter to 'DataFrame.pivot' to be a function to aggegrate pivoted values.");
+            var aggColumnName = valueColumnNameOrSpec;
+            var outputSpec = {};
+            outputSpec[aggColumnName] = aggregator;
+            aggSpec = {};
+            aggSpec[aggColumnName] = outputSpec;
+        }
+        else {
+            aggSpec = valueColumnNameOrSpec;
+        }
         var firstColumnName = columnNames[0];
         var working = this.groupBy(function (row) { return row[firstColumnName]; })
             .select(function (group) {
@@ -14643,18 +14654,51 @@ var DataFrame = /** @class */ (function () {
         for (var columnNameIndex = 1; columnNameIndex < columnNames.length; ++columnNameIndex) {
             _loop_2(columnNameIndex);
         }
+        var valueColumnNames = Object.keys(aggSpec);
+        var outputColumnsMap = utils_1.toMap(valueColumnNames, function (valueColumnName) { return valueColumnName; }, function (valueColumnName) { return Object.keys(aggSpec[valueColumnName]); });
         var pivotted = working.inflate(function (row) {
-            row[valueColumnName] = aggregator(row.src.deflate(function (srcRow) { return srcRow[valueColumnName]; }));
+            var _loop_3 = function (valueColumnName) {
+                var outputColumnNames = outputColumnsMap[valueColumnName];
+                try {
+                    for (var outputColumnNames_1 = __values(outputColumnNames), outputColumnNames_1_1 = outputColumnNames_1.next(); !outputColumnNames_1_1.done; outputColumnNames_1_1 = outputColumnNames_1.next()) {
+                        var outputColumName = outputColumnNames_1_1.value;
+                        var aggregatorFn = aggSpec[valueColumnName][outputColumName];
+                        row[outputColumName] = aggregatorFn(row.src.deflate(function (srcRow) { return srcRow[valueColumnName]; }));
+                    }
+                }
+                catch (e_54_1) { e_54 = { error: e_54_1 }; }
+                finally {
+                    try {
+                        if (outputColumnNames_1_1 && !outputColumnNames_1_1.done && (_a = outputColumnNames_1.return)) _a.call(outputColumnNames_1);
+                    }
+                    finally { if (e_54) throw e_54.error; }
+                }
+                var e_54, _a;
+            };
+            try {
+                for (var valueColumnNames_1 = __values(valueColumnNames), valueColumnNames_1_1 = valueColumnNames_1.next(); !valueColumnNames_1_1.done; valueColumnNames_1_1 = valueColumnNames_1.next()) {
+                    var valueColumnName = valueColumnNames_1_1.value;
+                    _loop_3(valueColumnName);
+                }
+            }
+            catch (e_55_1) { e_55 = { error: e_55_1 }; }
+            finally {
+                try {
+                    if (valueColumnNames_1_1 && !valueColumnNames_1_1.done && (_a = valueColumnNames_1.return)) _a.call(valueColumnNames_1);
+                }
+                finally { if (e_55) throw e_55.error; }
+            }
             delete row.src;
             return row;
+            var e_55, _a;
         });
         var ordered = pivotted.orderBy(function (row) { return row[firstColumnName]; });
-        var _loop_3 = function (columnNameIndex) {
+        var _loop_4 = function (columnNameIndex) {
             var nextColumnName = columnNames[columnNameIndex];
             ordered = ordered.thenBy(function (row) { return row[nextColumnName]; });
         };
         for (var columnNameIndex = 1; columnNameIndex < columnNames.length; ++columnNameIndex) {
-            _loop_3(columnNameIndex);
+            _loop_4(columnNameIndex);
         }
         return ordered;
         var e_53, _a;
